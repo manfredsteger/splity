@@ -3,6 +3,7 @@ import path from 'node:path';
 import { PORT, ensureDirectories, initToolVersions } from './config.js';
 import { healthRouter } from './routes/health.js';
 import { jobsRouter } from './routes/jobs.js';
+import { libraryRouter } from './routes/library.js';
 import { settingsRouter } from './routes/settings.js';
 import { videosRouter } from './routes/videos.js';
 
@@ -17,6 +18,7 @@ app.use(express.json());
 // API routes
 app.use('/api/health', healthRouter);
 app.use('/api/videos', videosRouter);
+app.use('/api/library', libraryRouter);
 app.use('/api/jobs', jobsRouter);
 app.use('/api/settings', settingsRouter);
 

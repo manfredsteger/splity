@@ -41,6 +41,11 @@ setup:
 		echo "$(BLUE)Erstelle Ordner auf dem Mac: $$SPLITY_DIR_PATH/Eingang und $$SPLITY_DIR_PATH/Fertig...$(NC)"; \
 		mkdir -p "$$SPLITY_DIR_PATH/Eingang" "$$SPLITY_DIR_PATH/Fertig"; \
 	fi
+	@LIB_PATH=$$(grep '^SPLITY_LIBRARY_PATH=' .env | cut -d '=' -f2-); \
+	if [ -z "$$LIB_PATH" ] || [ ! -d "$$LIB_PATH" ]; then \
+		echo "$(RED)Fehler: Bibliotheksordner '$$LIB_PATH' existiert nicht. Bitte SPLITY_LIBRARY_PATH in .env anpassen!$(NC)"; \
+		exit 1; \
+	fi
 	@echo "$(BLUE)Baue Docker Image...$(NC)"
 	docker compose build
 	@echo "$(BLUE)Starte Container...$(NC)"

@@ -8,6 +8,7 @@ services:
     volumes:
       - ./data:/app/data
       - ${SPLITY_PATH:?Bitte SPLITY_PATH in .env setzen}:/app/splity
+      - ${SPLITY_LIBRARY_PATH:?Bitte SPLITY_LIBRARY_PATH in .env setzen}:/app/library:ro
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -15,3 +16,5 @@ services:
       - DATA_DIR=/app/data
       - SPLITY_DIR=/app/splity
       - SPLITY_HOST_PATH=${SPLITY_PATH}
+      - LIBRARY_DIR=/app/library
+      - SPLITY_LIBRARY_HOST_PATH=${SPLITY_LIBRARY_PATH}

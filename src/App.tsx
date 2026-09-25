@@ -8,6 +8,7 @@ import { CuttingProgress } from './components/CuttingProgress.js';
 import { DragOverlay } from './components/DragOverlay.js';
 import { Dropzone } from './components/Dropzone.js';
 import { HistoryView } from './components/HistoryView.js';
+import { LibraryBrowser } from './components/LibraryBrowser.js';
 import { ResultCard } from './components/ResultCard.js';
 import { SettingsView } from './components/SettingsView.js';
 import { type NavTab, Sidebar } from './components/Sidebar.js';
@@ -45,6 +46,7 @@ export default function App() {
 
   // Active video workflow
   const [selectedVideo, setSelectedVideo] = useState<VideoItem | null>(null);
+  const [isBrowsingLibrary, setIsBrowsingLibrary] = useState(false);
   const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
   const [isLoadingProbe, setIsLoadingProbe] = useState(false);
   const [isAnalyzingVideo, setIsAnalyzingVideo] = useState(false);
@@ -643,6 +645,10 @@ export default function App() {
                 <VideoDetail
                   videoId={selectedVideo.id}
                   probe={probeResult}
+                  source={selectedVideo.source}
+                  relPath={selectedVideo.relPath}
+                  libraryHostPath={health?.paths.libraryHostPath}
+                  eingangHostPath={health ? `${health.paths.splityHostPath}/Eingang` : undefined}
                   defaultParts={settings.defaultParts}
                   onBack={() => {
                     setSelectedVideo(null);
@@ -685,23 +691,37 @@ export default function App() {
                 </div>
               )}
 
-              {/* 6. Empty State / Dropzone */}
+              {/* 6. Empty State: Library Browser or Dropzone */}
               {!isUploading && !activeJob && !resultData && !selectedVideo && (
-                <Dropzone
-                  onFileSelected={startUpload}
-                  existingVideos={existingVideos}
-                  onSelectExistingVideo={(v) => {
-                    setSelectedVideo(v);
-                    loadProbeForVideo(v.id);
-                  }}
-                  onDeleteExistingVideo={handleDeleteExistingVideo}
-                  eingangHostPath={
-                    health
-                      ? `${health.paths.splityHostPath}/Eingang`
-                      : 'Lade...'
-                  }
-                  isLoadingExisting={isLoadingExisting}
-                />
+                isBrowsingLibrary && health?.paths.libraryHostPath ? (
+                  <LibraryBrowser
+                    libraryHostPath={health.paths.libraryHostPath}
+                    onClose={() => setIsBrowsingLibrary(false)}
+                    onSelectVideo={(video) => {
+                      setIsBrowsingLibrary(false);
+                      setSelectedVideo(video);
+                      loadProbeForVideo(video.id);
+                    }}
+                  />
+                ) : (
+                  <Dropzone
+                    onFileSelected={startUpload}
+                    existingVideos={existingVideos}
+                    onSelectExistingVideo={(v) => {
+                      setSelectedVideo(v);
+                      loadProbeForVideo(v.id);
+                    }}
+                    onDeleteExistingVideo={handleDeleteExistingVideo}
+                    eingangHostPath={
+                      health
+                        ? `${health.paths.splityHostPath}/Eingang`
+                        : 'Lade...'
+                    }
+                    libraryHostPath={health?.paths.libraryHostPath}
+                    onOpenLibrary={() => setIsBrowsingLibrary(true)}
+                    isLoadingExisting={isLoadingExisting}
+                  />
+                )
               )}
             </div>
           )}

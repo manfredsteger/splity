@@ -23,6 +23,9 @@ export const DATA_DIR = path.resolve(process.env.DATA_DIR || './data');
 export const SPLITY_DIR = path.resolve(process.env.SPLITY_DIR || './splity');
 export const SPLITY_HOST_PATH = process.env.SPLITY_HOST_PATH || SPLITY_DIR;
 
+export const LIBRARY_DIR = process.env.LIBRARY_DIR ? path.resolve(process.env.LIBRARY_DIR) : null;
+export const SPLITY_LIBRARY_HOST_PATH = process.env.SPLITY_LIBRARY_HOST_PATH || (LIBRARY_DIR ? LIBRARY_DIR : null);
+
 export const EINGANG_DIR = path.join(SPLITY_DIR, 'Eingang');
 export const FERTIG_DIR = path.join(SPLITY_DIR, 'Fertig');
 export const CACHE_DIR = path.join(DATA_DIR, 'cache');

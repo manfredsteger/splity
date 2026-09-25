@@ -6,6 +6,8 @@ import {
   ExternalLink,
   Film,
   Folder,
+  FolderOpen,
+  HardDrive,
   Loader2,
   RefreshCw,
   XCircle,
@@ -66,6 +68,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             const isDone = job.status === 'done';
             const isError = job.status === 'error';
             const isCancelled = job.status === 'cancelled';
+            const isLib = job.source === 'lib' || job.videoId.startsWith('lib:');
 
             const modeLabel =
               job.mode.type === 'count'
@@ -81,13 +84,30 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                      isLib
+                        ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400'
+                        : 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400'
+                    }`}>
                       <Film className="w-5 h-5" />
                     </div>
 
                     <div className="min-w-0">
-                      <div className="font-bold text-sm text-zinc-900 dark:text-zinc-100 truncate" title={job.videoName}>
-                        {job.videoName}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="font-bold text-sm text-zinc-900 dark:text-zinc-100 truncate" title={job.videoName}>
+                          {job.videoName}
+                        </div>
+                        {isLib ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 shrink-0">
+                            <FolderOpen className="w-3 h-3" />
+                            <span>Bibliothek</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 shrink-0">
+                            <HardDrive className="w-3 h-3" />
+                            <span>Eingang</span>
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-2 mt-0.5">
                         <span className="font-medium text-zinc-700 dark:text-zinc-300">

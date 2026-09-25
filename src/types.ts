@@ -105,6 +105,7 @@ export interface Job {
   id: string;
   videoId: string;
   videoName: string;
+  source?: string;
   mode: SplitMode;
   status: JobStatus;
   phase?: JobPhase;
@@ -133,10 +134,38 @@ export interface HealthInfo {
   paths: {
     splityDir: string;
     splityHostPath: string;
+    libraryDir?: string | null;
+    libraryHostPath?: string | null;
     dataDir: string;
     eingang: string;
     fertig: string;
   };
+}
+
+export interface LibraryParent {
+  name: string;
+  path: string;
+}
+
+export interface LibraryFolder {
+  name: string;
+  path: string;
+}
+
+export interface LibraryVideo {
+  id: string;
+  name: string;
+  size: number;
+  mtime: string;
+}
+
+export interface LibraryBrowseResult {
+  path: string;
+  hostPath: string;
+  parents: LibraryParent[];
+  folders: LibraryFolder[];
+  videos: LibraryVideo[];
+  truncated: boolean;
 }
 
 export interface ToastMessage {

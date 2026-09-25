@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ALLOWED_EXTENSIONS, EINGANG_DIR } from './config.js';
+import { ALLOWED_EXTENSIONS, EINGANG_DIR, LIBRARY_DIR } from './config.js';
 import type { ResolvedVideo } from './types.js';
 
 const KNOWN_SOURCES = new Set(['inbox', 'lib']);
@@ -50,38 +50,78 @@ export function resolveVideo(id: string): ResolvedVideo | null {
     return null;
   }
 
+  // Versteckte Dateien/Ordner (beginnend mit ".") nie anzeigen / ablehnen
+  const segments = normalized.split(/[/\\]/);
+  if (segments.some((seg) => seg.startsWith('.'))) {
+    return null;
+  }
+
   const ext = path.extname(normalized).toLowerCase();
   if (!ALLOWED_EXTENSIONS.has(ext)) {
     return null;
   }
 
-  let sourceDir: string;
-  let deletable: boolean;
-
   if (source === 'inbox') {
-    sourceDir = EINGANG_DIR;
-    deletable = true;
-  } else {
-    // Zukünftige schreibgeschützte Quellen vorbereitet
-    return null;
+    const sourceDir = EINGANG_DIR;
+    const absPath = path.resolve(sourceDir, normalized);
+    if (!absPath.startsWith(sourceDir + path.sep) && absPath !== sourceDir) {
+      return null;
+    }
+
+    if (!fs.existsSync(absPath)) {
+      return null;
+    }
+
+    return {
+      source: 'inbox',
+      relPath: normalized,
+      absPath,
+      displayName: path.basename(normalized),
+      deletable: true,
+    };
   }
 
-  const absPath = path.resolve(sourceDir, normalized);
-  if (!absPath.startsWith(sourceDir + path.sep) && absPath !== sourceDir) {
-    return null;
+  if (source === 'lib') {
+    if (!LIBRARY_DIR || !fs.existsSync(LIBRARY_DIR)) {
+      return null;
+    }
+
+    const absPath = path.resolve(LIBRARY_DIR, normalized);
+    if (!absPath.startsWith(LIBRARY_DIR + path.sep) && absPath !== LIBRARY_DIR) {
+      return null;
+    }
+
+    if (!fs.existsSync(absPath)) {
+      return null;
+    }
+
+    // Sicherheit wie bei inbox, ZUSÄTZLICH fs.realpath prüfen:
+    // Das aufgelöste Ziel muss innerhalb von realpath(LIBRARY_DIR) liegen
+    // (Symlinks, die aus dem Ordner hinausführen, ablehnen).
+    try {
+      const realTarget = fs.realpathSync(absPath);
+      const realLibDir = fs.realpathSync(LIBRARY_DIR);
+      if (!realTarget.startsWith(realLibDir + path.sep) && realTarget !== realLibDir) {
+        return null;
+      }
+      const stat = fs.statSync(absPath);
+      if (!stat.isFile()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+
+    return {
+      source: 'lib',
+      relPath: normalized,
+      absPath,
+      displayName: path.basename(normalized),
+      deletable: false,
+    };
   }
 
-  if (!fs.existsSync(absPath)) {
-    return null;
-  }
-
-  return {
-    source,
-    relPath: normalized,
-    absPath,
-    displayName: path.basename(normalized),
-    deletable,
-  };
+  return null;
 }
 
 export interface ListedVideo extends ResolvedVideo {

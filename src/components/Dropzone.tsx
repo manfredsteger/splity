@@ -17,6 +17,8 @@ interface DropzoneProps {
   onSelectExistingVideo: (video: VideoItem) => void;
   onDeleteExistingVideo: (video: VideoItem) => void;
   eingangHostPath: string;
+  libraryHostPath?: string | null;
+  onOpenLibrary?: () => void;
   isLoadingExisting: boolean;
 }
 
@@ -26,6 +28,8 @@ export const Dropzone: React.FC<DropzoneProps> = ({
   onSelectExistingVideo,
   onDeleteExistingVideo,
   eingangHostPath,
+  libraryHostPath,
+  onOpenLibrary,
   isLoadingExisting,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -114,6 +118,54 @@ export const Dropzone: React.FC<DropzoneProps> = ({
         </button>
       </div>
 
+      {/* Dritter Block: Aus Bibliothek wählen (nur wenn konfiguriert) */}
+      {libraryHostPath && (
+        <div
+          onClick={onOpenLibrary}
+          className="group relative flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-purple-500 dark:hover:border-purple-500 transition-all cursor-pointer shadow-xs hover:shadow-lg hover:shadow-purple-500/5"
+        >
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-12 h-12 rounded-2xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <FolderOpen className="w-6 h-6" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-base text-zinc-900 dark:text-zinc-100 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">
+                  Aus Bibliothek wählen
+                </h4>
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300">
+                  keine Kopie
+                </span>
+              </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                Große Video-Dateien direkt vom Mac öffnen – ohne zeitaufwändigen Upload
+              </p>
+              <div className="flex items-center gap-2 mt-2 text-xs text-zinc-500">
+                <HardDrive className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0" />
+                <span className="font-mono text-zinc-800 dark:text-zinc-300 truncate bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded text-[11px] select-all">
+                  {libraryHostPath}
+                </span>
+                <span className="text-[10px] text-zinc-400 shrink-0">nur lesend</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="shrink-0 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenLibrary?.();
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs transition-colors shadow-sm shadow-purple-600/20 cursor-pointer"
+            >
+              <FolderOpen className="w-4 h-4" />
+              <span>Bibliothek öffnen</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Section: Schon im Eingang */}
       {existingVideos.length > 0 && (
         <div className="space-y-3">
@@ -174,35 +226,37 @@ export const Dropzone: React.FC<DropzoneProps> = ({
                     className="flex items-center gap-2 shrink-0"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {isConfirming ? (
-                      <div className="flex items-center gap-1.5 bg-red-50 dark:bg-red-950/40 p-1.5 rounded-xl border border-red-200 dark:border-red-900">
-                        <span className="text-xs text-red-600 dark:text-red-400 font-medium px-1">
-                          Löschen?
-                        </span>
+                    {v.deletable !== false && (
+                      isConfirming ? (
+                        <div className="flex items-center gap-1.5 bg-red-50 dark:bg-red-950/40 p-1.5 rounded-xl border border-red-200 dark:border-red-900">
+                          <span className="text-xs text-red-600 dark:text-red-400 font-medium px-1">
+                            Löschen?
+                          </span>
+                          <button
+                            onClick={() => {
+                              onDeleteExistingVideo(v);
+                              setConfirmDeleteId(null);
+                            }}
+                            className="px-2 py-1 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors"
+                          >
+                            Ja
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs font-medium hover:bg-zinc-300 dark:hover:bg-zinc-600 transition-colors"
+                          >
+                            Nein
+                          </button>
+                        </div>
+                      ) : (
                         <button
-                          onClick={() => {
-                            onDeleteExistingVideo(v);
-                            setConfirmDeleteId(null);
-                          }}
-                          className="px-2 py-1 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors"
+                          onClick={() => setConfirmDeleteId(v.id)}
+                          className="p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                          title="Aus Eingang löschen"
                         >
-                          Ja
+                          <Trash2 className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => setConfirmDeleteId(null)}
-                          className="px-2 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 text-xs font-medium hover:bg-zinc-300 dark:hover:bg-zinc-600 transition-colors"
-                        >
-                          Nein
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmDeleteId(v.id)}
-                        className="p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
-                        title="Aus Eingang löschen"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      )
                     )}
 
                     <button

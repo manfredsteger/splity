@@ -5,6 +5,8 @@ import {
   ChevronDown,
   Clock,
   Film,
+  FolderOpen,
+  HardDrive,
   Minus,
   Plus,
   Scissors,
@@ -22,6 +24,10 @@ interface VideoDetailProps {
   onStartSplit: (mode: SplitMode) => void;
   isStartingSplit: boolean;
   defaultParts: number;
+  source?: string;
+  relPath?: string;
+  libraryHostPath?: string | null;
+  eingangHostPath?: string | null;
 }
 
 export const VideoDetail: React.FC<VideoDetailProps> = ({
@@ -31,6 +37,10 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   onStartSplit,
   isStartingSplit,
   defaultParts,
+  source,
+  relPath,
+  libraryHostPath,
+  eingangHostPath,
 }) => {
   const [modeType, setModeType] = useState<'count' | 'every'>('count');
   const [partCount, setPartCount] = useState<number>(defaultParts || 8);
@@ -38,6 +48,15 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   const [plan, setPlan] = useState<SplitPlan | null>(null);
   const [hoveredPartIndex, setHoveredPartIndex] = useState<number | null>(null);
   const [, startTransition] = useTransition();
+
+  const isLib = source === 'lib' || videoId.startsWith('lib:');
+  const fullHostPath = isLib
+    ? libraryHostPath
+      ? `${libraryHostPath.replace(/\/+$/, '')}/${relPath || probe.filename}`
+      : relPath || probe.filename
+    : eingangHostPath
+    ? `${eingangHostPath.replace(/\/+$/, '')}/${probe.filename}`
+    : probe.filename;
 
   const currentMode: SplitMode =
     modeType === 'count'
@@ -124,13 +143,31 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-xs">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-4 min-w-0">
-            <div className="w-12 h-12 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+              isLib
+                ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400'
+                : 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400'
+            }`}>
               <Film className="w-6 h-6" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate" title={probe.filename}>
-                {probe.filename}
-              </h2>
+              <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 truncate" title={probe.filename}>
+                  {probe.filename}
+                </h2>
+                {isLib ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 shrink-0">
+                    <FolderOpen className="w-3 h-3" />
+                    <span>Bibliothek</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 shrink-0">
+                    <HardDrive className="w-3 h-3" />
+                    <span>Eingang</span>
+                  </span>
+                )}
+              </div>
+
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
                 <span className="font-semibold text-zinc-700 dark:text-zinc-300">
                   {formatTime(probe.duration)}
@@ -157,6 +194,16 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                   <span>{probe.audioTrackCount} Spur{probe.audioTrackCount !== 1 ? 'en' : ''}</span>
                 </span>
               </div>
+
+              {fullHostPath && (
+                <div className="flex items-center gap-1.5 text-[11px] font-mono text-zinc-500 dark:text-zinc-400 mt-1.5 truncate">
+                  <HardDrive className="w-3 h-3 text-zinc-400 shrink-0" />
+                  <span className="truncate select-all">{fullHostPath}</span>
+                  {isLib && (
+                    <span className="text-[10px] text-zinc-400 font-sans shrink-0">(nur lesend)</span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

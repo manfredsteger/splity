@@ -290,6 +290,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 {health?.paths.dataDir || '...'}
               </div>
             </div>
+
+            {health?.paths.libraryHostPath ? (
+              <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 space-y-1">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+                    Bibliotheksordner
+                  </div>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300">
+                    nur lesend
+                  </span>
+                </div>
+                <div className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100 select-all">
+                  {health.paths.libraryHostPath}
+                </div>
+                <div className="font-mono text-[11px] text-zinc-400">
+                  Container: {health.paths.libraryDir || '...'}
+                </div>
+              </div>
+            ) : (
+              <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 space-y-1">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+                    Bibliotheksordner
+                  </div>
+                  <span className="text-[10px] text-zinc-400 font-medium">Nicht konfiguriert</span>
+                </div>
+                <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                  In Docker über <code className="font-mono text-blue-500">SPLITY_LIBRARY_PATH</code> in <code className="font-mono text-blue-500">.env</code> lesend einbindbar.
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

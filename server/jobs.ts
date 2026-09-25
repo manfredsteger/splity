@@ -6,7 +6,7 @@ import { planSplit } from './media/plan.js';
 import { probeVideo } from './media/probe.js';
 import { executeSplit, type SplitExecutionHandle } from './media/split.js';
 import { verifyParts } from './media/verify.js';
-import { resolveVideo } from './sources.js';
+import { decodeVideoId, resolveVideo } from './sources.js';
 import type { Job, SplitMode } from './types.js';
 
 class JobQueue extends EventEmitter {
@@ -26,15 +26,21 @@ class JobQueue extends EventEmitter {
         const data = JSON.parse(fs.readFileSync(JOBS_FILE, 'utf-8'));
         if (Array.isArray(data)) {
           this.jobs = data.map((j: Job) => {
+            const decoded = decodeVideoId(j.videoId);
+            const source = j.source || decoded?.source || (j.videoId?.startsWith('lib:') ? 'lib' : 'inbox');
             // Mark any running or queued jobs from previous session as error
             if (j.status === 'running' || j.status === 'queued') {
               return {
                 ...j,
+                source,
                 status: 'error' as const,
                 error: 'Server-Neustart',
               };
             }
-            return j;
+            return {
+              ...j,
+              source,
+            };
           });
           this.saveJobs();
         }
@@ -79,10 +85,13 @@ class JobQueue extends EventEmitter {
 
   public addJob(videoId: string, videoName: string, mode: SplitMode): Job {
     const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const decoded = decodeVideoId(videoId);
+    const source = decoded?.source || (videoId.startsWith('lib:') ? 'lib' : 'inbox');
     const job: Job = {
       id,
       videoId,
       videoName,
+      source,
       mode,
       status: 'queued',
       progress: 0,

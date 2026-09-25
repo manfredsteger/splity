@@ -82,6 +82,24 @@ Splity ist eine selbst gehostete Web-Anwendung, die Videos **verlustfrei** (ohne
 | `SPLITY_DIR` | `./splity` | Basisordner mit `Eingang/` und `Fertig/` |
 | `SPLITY_HOST_PATH` | Wert von `SPLITY_PATH` | Pfad auf dem Mac/Host-System zur Anzeige in der UI |
 | `SPLITY_PATH` | (aus `.env`) | Host-Verzeichnis (z. B. `/Users/<user>/Movies/Splity`) |
+| `LIBRARY_DIR` | `/app/library` | Container-Pfad der lesend eingebundenen Film-Bibliothek |
+| `SPLITY_LIBRARY_HOST_PATH` | Wert von `SPLITY_LIBRARY_PATH` | Bibliotheks-Pfad auf dem Mac/Host zur Anzeige in der UI |
+| `SPLITY_LIBRARY_PATH` | (aus `.env`) | Host-Verzeichnis der Bibliothek (z. B. `/Users/<user>/Movies`) |
+
+---
+
+## 4. Video-Quellen ("inbox" und "lib")
+
+Splity unterstützt zwei Quellen für Videodateien über einheitliche Video-IDs (`<source>:<base64url>`):
+
+1. **`inbox` (Eingangsordner)**:
+   - Speicherort: `Eingang/` im Splity-Ordner.
+   - Uploads per Browser werden hier abgelegt; Dateien können gelöscht werden (`deletable: true`).
+2. **`lib` (Lokale Bibliothek)**:
+   - Speicherort: `LIBRARY_DIR` (`/app/library:ro`), beliebig tief geschachtelt.
+   - Read-only (`deletable: false`).
+   - Sicherheit: Pfad wird zusätzlich per `fs.realpath` gegen das aufgelöste Bibliotheksverzeichnis geprüft, um Symlink-Ausbrüche zu verhindern. Versteckte Dateien und Ordner (beginnend mit `.`) werden strikt ignoriert. Der eigene Splity-Ordner darf in der Bibliothek liegen, um Schnitte erneut zu teilen.
+   - Videos werden direkt und ohne Kopieren analysiert und verarbeitet; die fertigen Schnitte landen unverändert in `Fertig/<name>/`.
 
 ---
 
@@ -133,7 +151,8 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 10. **React Hook-Disziplin**: Alle React-Hooks (`useState`, `useEffect`, `useCallback`) stehen ausnahmslos vor jedem bedingten Return.
 11. **Immer `-c copy` und `-map_metadata 0`**: Nie ein Encoder-Flag (`-c:v libx264` o. Ä.) in einem Schnitt- oder Merge-Aufruf. Ohne `-map_metadata 0` verliert der Segment-Muxer das Aufnahmedatum (`creation_time`).
 12. **Basis-Image `node:22-trixie-slim`** (ffmpeg 7.1), nicht bookworm: ffmpeg 5.1 trägt bei MOV-Dateien mit Timecode-Spur (iPhone) dem ersten Teil die Gesamtdauer des Originals ein.
-13. **Video-IDs nur über eine zentrale Auflösung** (`path.basename`, Prüfung gegen den Quellordner). Nie Pfade aus der URL direkt öffnen.
+13. **Die Bibliothek ist read-only. Splity schreibt, löscht oder benennt dort nie etwas.**
+14. **Video-IDs nur über eine zentrale Auflösung** (`sources.ts`, Prüfung gegen den Quellordner und `fs.realpath`). Nie Pfade aus der URL direkt öffnen.
 
 ### Erkenntnisse aus dem Review (2026-09-25)
 - Der Segment-Muxer bekommt Muxer-Optionen nur über `-segment_format_options` (z. B. `movflags=+faststart:strict=experimental`); ein globales `-strict` wirkt dort nicht. `strict=experimental` ist nötig für FLAC-Ton in MP4.

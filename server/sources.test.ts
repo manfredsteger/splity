@@ -24,4 +24,22 @@ describe('sources', () => {
     expect(resolveVideo('script.sh')).toBeNull();
     expect(resolveVideo('inbox:' + Buffer.from('malware.exe').toString('base64url'))).toBeNull();
   });
+
+  it('encodes and decodes video id for lib source', () => {
+    const id = encodeVideoId('lib', 'Dokus/Natur/2026.mp4');
+    expect(id).toMatch(/^lib:/);
+    const decoded = decodeVideoId(id);
+    expect(decoded).toEqual({ source: 'lib', relPath: 'Dokus/Natur/2026.mp4' });
+  });
+
+  it('rejects hidden folders and path traversal in lib source', () => {
+    const hiddenId = encodeVideoId('lib', '.secret/video.mp4');
+    expect(resolveVideo(hiddenId)).toBeNull();
+
+    const hiddenFileId = encodeVideoId('lib', 'Dokus/.hidden.mp4');
+    expect(resolveVideo(hiddenFileId)).toBeNull();
+
+    const traversalId = encodeVideoId('lib', '../outside.mp4');
+    expect(resolveVideo(traversalId)).toBeNull();
+  });
 });
