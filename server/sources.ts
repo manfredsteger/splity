@@ -3,6 +3,8 @@ import path from 'node:path';
 import { ALLOWED_EXTENSIONS, EINGANG_DIR } from './config.js';
 import type { ResolvedVideo } from './types.js';
 
+const KNOWN_SOURCES = new Set(['inbox', 'lib']);
+
 export function encodeVideoId(source: string, relPath: string): string {
   const b64 = Buffer.from(relPath, 'utf8').toString('base64url');
   return `${source}:${b64}`;
@@ -11,8 +13,10 @@ export function encodeVideoId(source: string, relPath: string): string {
 export function decodeVideoId(id: string): { source: string; relPath: string } | null {
   if (!id || typeof id !== 'string') return null;
 
+  // Nur bekannte Quellen-Präfixe zählen; ein Legacy-Dateiname wie "Aufnahme 12:30.mp4"
+  // darf nicht als Quelle "Aufnahme 12" gelesen werden.
   const colonIdx = id.indexOf(':');
-  if (colonIdx !== -1) {
+  if (colonIdx !== -1 && KNOWN_SOURCES.has(id.slice(0, colonIdx))) {
     const source = id.slice(0, colonIdx);
     const encoded = id.slice(colonIdx + 1);
     try {

@@ -143,7 +143,9 @@ export function startVideoAnalysis(resolved: ResolvedVideo, videoId: string): Pr
       // 2. Extract keyframes with live progress
       const rawKeyframes = await runFfprobeKeyframes(resolved.absPath, (latestTime) => {
         if (duration > 0) {
-          const pct = Math.min(99, Math.round((latestTime / duration) * 100));
+          // Paketzeiten sind absolut (bei .ts oft ab 100 s+): start_time abziehen, sonst
+          // springt der Fortschritt sofort auf 99 %.
+          const pct = Math.min(99, Math.max(0, Math.round(((latestTime - startTime) / duration) * 100)));
           if (pct > currentPercent) {
             currentPercent = pct;
             const entry = activeAnalyses.get(videoId);

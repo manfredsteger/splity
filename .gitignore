@@ -9,3 +9,4 @@ splity/
 .DS_Store
 *.log
 
+bun.lock
