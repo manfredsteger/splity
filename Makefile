@@ -51,7 +51,10 @@ setup:
 	@echo "$(GREEN)=====================================================$(NC)"
 
 prod:
+	@echo "$(BLUE)Baue und starte Splity im Produktionsmodus...$(NC)"
+	docker compose build
 	docker compose up -d
+	@echo "$(GREEN)✓ Splity läuft unter http://localhost:3006$(NC)"
 
 dev:
 	PORT=3007 npm run dev
