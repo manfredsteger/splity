@@ -27,10 +27,15 @@ app.all('/api/*', (req: Request, res: Response) => {
 
 // JSON Error Middleware for all API errors
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  console.error('[Splity Fehler]', err);
   if (res.headersSent) {
     return next(err);
   }
+  // Bei kaputtem JSON-Body 400 { error: "Ungültiges JSON" } statt der rohen SyntaxError-Meldung
+  if (err instanceof SyntaxError && 'body' in err && (err as any).status === 400) {
+    return res.status(400).json({ error: 'Ungültiges JSON' });
+  }
+
+  console.error('[Splity Fehler]', err);
   const status = typeof err.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
   const message = err.message || 'Ein unerwarteter Fehler ist aufgetreten.';
   res.status(status).json({ error: message });

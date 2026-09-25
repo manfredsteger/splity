@@ -2,23 +2,24 @@ import { Router } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import busboy from 'busboy';
-import { ALLOWED_EXTENSIONS, CACHE_DIR, EINGANG_DIR } from '../config.js';
+import { ALLOWED_EXTENSIONS, EINGANG_DIR } from '../config.js';
 import { jobQueue } from '../jobs.js';
 import { planSplit } from '../media/plan.js';
-import { generateThumbnail, getFileCacheKey, probeVideo } from '../media/probe.js';
+import {
+  generateThumbnail,
+  getAnalysisEmitter,
+  getAnalysisProgress,
+  getCachedProbe,
+  isAnalyzingVideo,
+  probeVideo,
+  startVideoAnalysis,
+} from '../media/probe.js';
 import { sanitizeFileName } from '../media/split.js';
-import type { ProbeResult, SplitMode } from '../types.js';
+import { encodeVideoId, listVideos, resolveVideo } from '../sources.js';
+import type { SplitMode } from '../types.js';
 
 export const videosRouter = Router();
 
-function getSafeVideoPath(id: string): { baseName: string; fullPath: string } {
-  const baseName = path.basename(id);
-  const fullPath = path.join(EINGANG_DIR, baseName);
-  return { baseName, fullPath };
-}
-
-// Schnittmodus aus dem Request-Body strikt prüfen: Ohne Prüfung wird z. B. n="abc" still zu
-// einem einzigen Teil, statt mit 400 zu antworten.
 function parseSplitMode(raw: unknown): SplitMode | null {
   if (!raw || typeof raw !== 'object') return null;
   const mode = raw as Record<string, unknown>;
@@ -54,50 +55,32 @@ function findUniqueUploadFileName(baseName: string): string {
   return candidate;
 }
 
-// GET /api/videos - List all videos in Eingang/
+// GET /api/videos - List all videos via sources
 videosRouter.get('/', async (req, res, next) => {
   try {
-    const files = fs.readdirSync(EINGANG_DIR, { withFileTypes: true });
-    const videoFiles = files.filter((f) => {
-      if (!f.isFile()) return false;
-      if (f.name.startsWith('.')) return false;
-      const ext = path.extname(f.name).toLowerCase();
-      return ALLOWED_EXTENSIONS.has(ext);
-    });
+    const videos = listVideos('inbox');
 
-    const list = videoFiles.map((f) => {
-      const fullPath = path.join(EINGANG_DIR, f.name);
-      const stat = fs.statSync(fullPath);
-
-      // Check if probe cache already exists
-      let probeData: Partial<ProbeResult> | null = null;
-      try {
-        const cacheKey = getFileCacheKey(fullPath);
-        const cachePath = path.join(CACHE_DIR, `${cacheKey}.json`);
-        if (fs.existsSync(cachePath)) {
-          const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
-          probeData = cached;
-        }
-      } catch {
-        // probe cache not available yet
-      }
+    const list = videos.map((v) => {
+      const probeData = getCachedProbe(v);
 
       return {
-        id: f.name,
-        name: f.name,
-        size: stat.size,
-        mtime: stat.mtime.toISOString(),
+        id: v.id,
+        name: v.displayName,
+        source: v.source,
+        relPath: v.relPath,
+        size: v.size,
+        mtime: v.mtime,
+        deletable: v.deletable,
         isAnalyzed: Boolean(probeData),
         duration: probeData?.duration,
         container: probeData?.container,
         resolution: probeData?.video ? `${probeData.video.width}x${probeData.video.height}` : undefined,
         codec: probeData?.video?.codec,
         fps: probeData?.video?.fps,
+        keyframeIntervalAvg: probeData?.keyframeIntervalAvg,
+        keyframeIntervalMax: probeData?.keyframeIntervalMax,
       };
     });
-
-    // Sort by mtime descending (newest first)
-    list.sort((a, b) => new Date(b.mtime).getTime() - new Date(a.mtime).getTime());
 
     res.json(list);
   } catch (err) {
@@ -124,13 +107,10 @@ videosRouter.post('/upload', (req, res, next) => {
   let currentTargetPath: string | null = null;
   let fileError: string | null = null;
   let bytesWritten = 0;
-  // Busboy meldet 'close', bevor der Schreib-Stream fertig ist. Ohne Warten antwortet der
-  // Server "Keine Datei empfangen", obwohl die Datei gleich darauf korrekt auf der Platte liegt.
   let writeDone: Promise<void> = Promise.resolve();
 
   bb.on('file', (fieldname, file, info) => {
     let rawFilename = info.filename || 'video.mp4';
-    // Fix potential double UTF-8 decoding if needed
     try {
       const latin1Decoded = Buffer.from(rawFilename, 'latin1').toString('utf8');
       if (!latin1Decoded.includes('') && latin1Decoded !== rawFilename) {
@@ -181,7 +161,7 @@ videosRouter.post('/upload', (req, res, next) => {
         try {
           fs.renameSync(currentPartPath, currentTargetPath);
           uploadedFileResult = {
-            id: uniqueName,
+            id: encodeVideoId('inbox', uniqueName),
             name: uniqueName,
             size: bytesWritten,
           };
@@ -238,31 +218,132 @@ videosRouter.post('/upload', (req, res, next) => {
   req.pipe(bb);
 });
 
-// GET /api/videos/:id - Probe metadata and keyframes
+// GET /api/videos/:id - Probe metadata and keyframes (202 if analyzing)
 videosRouter.get('/:id', async (req, res, next) => {
   try {
-    const { fullPath } = getSafeVideoPath(req.params.id);
-    if (!fs.existsSync(fullPath)) {
-      return res.status(404).json({ error: 'Video nicht im Eingangsordner gefunden.' });
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
+      return res.status(404).json({ error: 'Video nicht gefunden.' });
     }
 
-    const probe = await probeVideo(fullPath);
-    res.json(probe);
+    const cached = getCachedProbe(resolved);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    if (isAnalyzingVideo(req.params.id)) {
+      return res.status(202).json({
+        analyzing: true,
+        percent: getAnalysisProgress(req.params.id),
+      });
+    }
+
+    // Start analysis in background and return 202
+    startVideoAnalysis(resolved, req.params.id).catch((err) => {
+      console.error('Analysefehler:', err);
+    });
+
+    res.status(202).json({ analyzing: true, percent: 0 });
   } catch (err: any) {
     next(err);
   }
 });
 
-// GET /api/videos/:id/thumb - Thumbnail image at time t
+// GET /api/videos/:id/events - SSE Stream for analysis progress
+videosRouter.get('/:id/events', async (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
+      return res.status(404).json({ error: 'Video nicht gefunden.' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const sendEvent = (data: any) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const cached = getCachedProbe(resolved);
+    if (cached) {
+      sendEvent({ type: 'done' });
+      return res.end();
+    }
+
+    // Ensure analysis is initiated
+    startVideoAnalysis(resolved, req.params.id).catch(() => {});
+
+    const emitter = getAnalysisEmitter(req.params.id);
+    if (!emitter) {
+      sendEvent({ type: 'done' });
+      return res.end();
+    }
+
+    // Send initial progress if any
+    sendEvent({ type: 'progress', percent: getAnalysisProgress(req.params.id) });
+
+    const onProgress = (percent: number) => {
+      sendEvent({ type: 'progress', percent });
+    };
+
+    const onDone = () => {
+      sendEvent({ type: 'done' });
+      setTimeout(() => {
+        try {
+          res.end();
+        } catch {
+          // ignore
+        }
+      }, 200);
+    };
+
+    const onError = (err: any) => {
+      sendEvent({ type: 'error', error: err.message || 'Analysefehler' });
+      setTimeout(() => {
+        try {
+          res.end();
+        } catch {
+          // ignore
+        }
+      }, 200);
+    };
+
+    emitter.on('progress', onProgress);
+    emitter.once('done', onDone);
+    emitter.once('error', onError);
+
+    // Keep-alive heartbeat
+    const ping = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        // ignore
+      }
+    }, 15000);
+
+    req.on('close', () => {
+      clearInterval(ping);
+      emitter.off('progress', onProgress);
+      emitter.off('done', onDone);
+      emitter.off('error', onError);
+    });
+  } catch (err: any) {
+    next(err);
+  }
+});
+
+// GET /api/videos/:id/thumb - Thumbnail image at time t (sequentially queued)
 videosRouter.get('/:id/thumb', async (req, res, next) => {
   try {
-    const { fullPath } = getSafeVideoPath(req.params.id);
-    if (!fs.existsSync(fullPath)) {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
       return res.status(404).json({ error: 'Video nicht gefunden.' });
     }
 
     const t = req.query.t ? parseFloat(req.query.t as string) : 0;
-    const thumbPath = await generateThumbnail(fullPath, Number.isNaN(t) ? 0 : t);
+    const thumbPath = await generateThumbnail(resolved.absPath, Number.isNaN(t) ? 0 : t);
 
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -275,8 +356,8 @@ videosRouter.get('/:id/thumb', async (req, res, next) => {
 // POST /api/videos/:id/plan - Calculate split plan without cutting
 videosRouter.post('/:id/plan', async (req, res, next) => {
   try {
-    const { fullPath } = getSafeVideoPath(req.params.id);
-    if (!fs.existsSync(fullPath)) {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
       return res.status(404).json({ error: 'Video nicht gefunden.' });
     }
 
@@ -285,7 +366,7 @@ videosRouter.post('/:id/plan', async (req, res, next) => {
       return res.status(400).json({ error: 'Ungültiger Schnittmodus übergeben.' });
     }
 
-    const probe = await probeVideo(fullPath);
+    const probe = await probeVideo(resolved, req.params.id);
     const plan = planSplit(probe.duration, probe.keyframes, mode);
 
     res.json(plan);
@@ -297,8 +378,8 @@ videosRouter.post('/:id/plan', async (req, res, next) => {
 // POST /api/videos/:id/split - Enqueue split job
 videosRouter.post('/:id/split', async (req, res, next) => {
   try {
-    const { baseName, fullPath } = getSafeVideoPath(req.params.id);
-    if (!fs.existsSync(fullPath)) {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
       return res.status(404).json({ error: 'Video nicht gefunden.' });
     }
 
@@ -307,7 +388,7 @@ videosRouter.post('/:id/split', async (req, res, next) => {
       return res.status(400).json({ error: 'Ungültiger Schnittmodus übergeben.' });
     }
 
-    const job = jobQueue.addJob(baseName, baseName, mode);
+    const job = jobQueue.addJob(req.params.id, resolved.displayName, mode);
     res.json({ ok: true, jobId: job.id, job });
   } catch (err: any) {
     next(err);
@@ -321,15 +402,18 @@ videosRouter.delete('/:id', (req, res, next) => {
       return res.status(400).json({ error: 'Löschen erfordert Bestätigung (?confirm=1).' });
     }
 
-    const { baseName, fullPath } = getSafeVideoPath(req.params.id);
-    if (!fs.existsSync(fullPath)) {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
       return res.status(404).json({ error: 'Video nicht gefunden.' });
     }
-    if (jobQueue.isVideoBusy(baseName)) {
+    if (!resolved.deletable) {
+      return res.status(403).json({ error: 'Diese Videoquelle ist schreibgeschützt und kann nicht gelöscht werden.' });
+    }
+    if (jobQueue.isVideoBusy(req.params.id)) {
       return res.status(409).json({ error: 'Das Video wird gerade geschnitten und kann nicht gelöscht werden.' });
     }
 
-    fs.rmSync(fullPath, { force: true });
+    fs.rmSync(resolved.absPath, { force: true });
     res.json({ ok: true, message: 'Video erfolgreich gelöscht.' });
   } catch (err: any) {
     next(err);

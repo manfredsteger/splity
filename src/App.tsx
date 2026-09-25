@@ -46,6 +46,10 @@ export default function App() {
   const [selectedVideo, setSelectedVideo] = useState<VideoItem | null>(null);
   const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
   const [isLoadingProbe, setIsLoadingProbe] = useState(false);
+  const [isAnalyzingVideo, setIsAnalyzingVideo] = useState(false);
+  const [analysisPercent, setAnalysisPercent] = useState(0);
+  const activeAnalysisEsRef = useRef<EventSource | null>(null);
+
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [isStartingSplit, setIsStartingSplit] = useState(false);
   const [isCancellingJob, setIsCancellingJob] = useState(false);
@@ -147,40 +151,106 @@ export default function App() {
     fetchVideos();
     fetchJobs();
 
-    // Health refresh interval every 30s
     const interval = setInterval(() => {
       fetchHealth();
     }, 30000);
     return () => clearInterval(interval);
   }, [fetchHealth, fetchSettings, fetchVideos, fetchJobs]);
 
-  // Load probe data for a video
+  // Clean up analysis SSE on unmount
+  useEffect(() => {
+    return () => {
+      if (activeAnalysisEsRef.current) {
+        activeAnalysisEsRef.current.close();
+      }
+    };
+  }, []);
+
+  // Load probe data for a video (handles 202 with SSE progress)
   const loadProbeForVideo = useCallback(
-    async (videoName: string) => {
+    async (videoId: string) => {
+      if (activeAnalysisEsRef.current) {
+        activeAnalysisEsRef.current.close();
+        activeAnalysisEsRef.current = null;
+      }
+
       setIsLoadingProbe(true);
+      setIsAnalyzingVideo(false);
+      setAnalysisPercent(0);
+
       try {
-        const res = await fetch(`/api/videos/${encodeURIComponent(videoName)}`);
+        const res = await fetch(`/api/videos/${encodeURIComponent(videoId)}`);
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.error || 'Fehler beim Analysieren des Videos.');
         }
+
+        if (res.status === 202) {
+          // Analysis is in progress: subscribe to SSE events
+          const initialData = await res.json().catch(() => ({}));
+          setIsAnalyzingVideo(true);
+          setAnalysisPercent(initialData.percent || 0);
+
+          const es = new EventSource(`/api/videos/${encodeURIComponent(videoId)}/events`);
+          activeAnalysisEsRef.current = es;
+
+          es.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              if (data.type === 'progress') {
+                setAnalysisPercent(data.percent || 0);
+              } else if (data.type === 'done') {
+                es.close();
+                activeAnalysisEsRef.current = null;
+                // Fetch completed probe result
+                fetch(`/api/videos/${encodeURIComponent(videoId)}`)
+                  .then((r) => r.json())
+                  .then((finalProbe: ProbeResult) => {
+                    setProbeResult(finalProbe);
+                    setIsAnalyzingVideo(false);
+                    setIsLoadingProbe(false);
+                    fetchVideos();
+                  })
+                  .catch((err) => {
+                    setIsAnalyzingVideo(false);
+                    setIsLoadingProbe(false);
+                    addToast('error', err.message || 'Konnte Metadaten nicht laden.', 'Analysefehler');
+                  });
+              } else if (data.type === 'error') {
+                es.close();
+                activeAnalysisEsRef.current = null;
+                setIsAnalyzingVideo(false);
+                setIsLoadingProbe(false);
+                addToast('error', data.error || 'Analysefehler', 'Fehler');
+              }
+            } catch {
+              // ignore
+            }
+          };
+
+          es.onerror = () => {
+            // EventSource will retry or handle connection drops
+          };
+          return;
+        }
+
+        // 200 OK: already analyzed
         const probe = (await res.json()) as ProbeResult;
         setProbeResult(probe);
+        setIsLoadingProbe(false);
       } catch (err: any) {
         addToast('error', err.message || 'Konnte Metadaten nicht lesen.', 'Analysefehler');
         setSelectedVideo(null);
         setProbeResult(null);
-      } finally {
         setIsLoadingProbe(false);
       }
     },
-    [addToast]
+    [addToast, fetchVideos]
   );
 
   // File Upload handler via XMLHttpRequest with real progress
   const startUpload = useCallback(
     (file: File) => {
-      // Abort any existing upload
       if (currentXhrRef.current) {
         currentXhrRef.current.abort();
       }
@@ -236,7 +306,7 @@ export default function App() {
             fetchVideos();
             fetchHealth();
 
-            // Auto-select uploaded video and analyze
+            // Auto-select uploaded video and trigger analysis via video ID
             setSelectedVideo({
               id: data.video.id,
               name: data.video.name,
@@ -244,7 +314,7 @@ export default function App() {
               mtime: new Date().toISOString(),
               isAnalyzed: false,
             });
-            loadProbeForVideo(data.video.name);
+            loadProbeForVideo(data.video.id);
           } catch {
             addToast('error', 'Ungültige Serverantwort beim Upload.', 'Fehler');
           }
@@ -341,7 +411,7 @@ export default function App() {
       setIsStartingSplit(true);
 
       try {
-        const res = await fetch(`/api/videos/${encodeURIComponent(selectedVideo.name)}/split`, {
+        const res = await fetch(`/api/videos/${encodeURIComponent(selectedVideo.id)}/split`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode }),
@@ -364,7 +434,7 @@ export default function App() {
     [selectedVideo, probeResult, fetchJobs, addToast]
   );
 
-  // Subscribe to SSE events for active job
+  // Subscribe to SSE events for active cutting job
   useEffect(() => {
     if (!activeJob) return;
 
@@ -382,7 +452,7 @@ export default function App() {
               result: updatedJob.result,
             });
           }
-          addToast('success', `${updatedJob.result?.files.length || 0} Teile verlustfrei erstellt!`, 'Schnitt fertig');
+          addToast('success', `${updatedJob.result?.files.length || 0} Teile erstellt!`, 'Schnitt fertig');
           setActiveJob(null);
           eventSource.close();
           fetchJobs();
@@ -448,11 +518,11 @@ export default function App() {
     [addToast, fetchJobs]
   );
 
-  // Delete Video from Eingang
+  // Delete Video from Source (Inbox)
   const handleDeleteExistingVideo = useCallback(
     async (v: VideoItem) => {
       try {
-        const res = await fetch(`/api/videos/${encodeURIComponent(v.name)}?confirm=1`, {
+        const res = await fetch(`/api/videos/${encodeURIComponent(v.id)}?confirm=1`, {
           method: 'DELETE',
         });
         if (!res.ok) {
@@ -570,6 +640,7 @@ export default function App() {
               {/* 4. Video Detail / Cut Configuration */}
               {!isUploading && !activeJob && !resultData && selectedVideo && probeResult && (
                 <VideoDetail
+                  videoId={selectedVideo.id}
                   probe={probeResult}
                   defaultParts={settings.defaultParts}
                   onBack={() => {
@@ -582,19 +653,33 @@ export default function App() {
                 />
               )}
 
-              {/* 5. Loading probe spinner */}
-              {!isUploading && !activeJob && !resultData && selectedVideo && !probeResult && isLoadingProbe && (
-                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-12 text-center max-w-lg mx-auto my-12 shadow-sm space-y-4">
-                  <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 flex items-center justify-center mx-auto animate-pulse">
-                    <span className="w-6 h-6 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              {/* 5. Loading probe / analyzing progress bar */}
+              {!isUploading && !activeJob && !resultData && selectedVideo && !probeResult && (isLoadingProbe || isAnalyzingVideo) && (
+                <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-8 text-center max-w-lg mx-auto my-12 shadow-sm space-y-5 animate-in fade-in">
+                  <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 flex items-center justify-center mx-auto">
+                    <span className="w-7 h-7 border-3 border-blue-600 border-t-transparent rounded-full animate-spin" />
                   </div>
                   <div>
                     <h3 className="font-bold text-lg text-zinc-900 dark:text-zinc-100">
                       Video wird blitzschnell analysiert
                     </h3>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                      Keyframes werden ohne Neukodierung erfasst...
+                      Keyframes und Metadaten werden ohne Neukodierung erfasst...
                     </p>
+                  </div>
+
+                  {/* Real progress bar during keyframe extraction */}
+                  <div className="space-y-2 max-w-sm mx-auto pt-1">
+                    <div className="flex justify-between text-xs font-semibold text-zinc-600 dark:text-zinc-400">
+                      <span>Keyframe-Erfassung</span>
+                      <span className="font-mono text-blue-600 dark:text-blue-400">{analysisPercent}%</span>
+                    </div>
+                    <div className="w-full h-2.5 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-600 rounded-full transition-all duration-150"
+                        style={{ width: `${Math.max(4, analysisPercent)}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -606,7 +691,7 @@ export default function App() {
                   existingVideos={existingVideos}
                   onSelectExistingVideo={(v) => {
                     setSelectedVideo(v);
-                    loadProbeForVideo(v.name);
+                    loadProbeForVideo(v.id);
                   }}
                   onDeleteExistingVideo={handleDeleteExistingVideo}
                   eingangHostPath={

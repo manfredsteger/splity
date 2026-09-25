@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import { EINGANG_DIR, JOBS_FILE, loadSettings } from './config.js';
+import { JOBS_FILE, loadSettings } from './config.js';
 import { planSplit } from './media/plan.js';
 import { probeVideo } from './media/probe.js';
 import { executeSplit, type SplitExecutionHandle } from './media/split.js';
+import { resolveVideo } from './sources.js';
 import type { Job, SplitMode } from './types.js';
 
 class JobQueue extends EventEmitter {
@@ -61,9 +62,18 @@ class JobQueue extends EventEmitter {
   }
 
   public isVideoBusy(videoId: string): boolean {
-    return this.jobs.some(
-      (j) => j.videoId === videoId && (j.status === 'queued' || j.status === 'running')
-    );
+    const resolved = resolveVideo(videoId);
+    const targetPath = resolved?.absPath;
+
+    return this.jobs.some((j) => {
+      if (j.status !== 'queued' && j.status !== 'running') return false;
+      if (j.videoId === videoId) return true;
+      if (targetPath) {
+        const jResolved = resolveVideo(j.videoId);
+        return jResolved?.absPath === targetPath;
+      }
+      return false;
+    });
   }
 
   public addJob(videoId: string, videoName: string, mode: SplitMode): Job {
@@ -136,15 +146,14 @@ class JobQueue extends EventEmitter {
     this.emit(`job:${nextJob.id}`, nextJob);
     this.emit('queue:update', this.jobs);
 
-    const sourcePath = path.join(EINGANG_DIR, path.basename(nextJob.videoId));
-
     try {
-      if (!fs.existsSync(sourcePath)) {
+      const resolved = resolveVideo(nextJob.videoId);
+      if (!resolved) {
         throw new Error(`Quelldatei nicht gefunden: ${nextJob.videoId}`);
       }
 
       // Analyze source video
-      const probe = await probeVideo(sourcePath);
+      const probe = await probeVideo(resolved, nextJob.videoId);
       // Calculate split plan
       const plan = planSplit(probe.duration, probe.keyframes, nextJob.mode);
       if ((nextJob.status as string) === 'cancelled') {
@@ -154,7 +163,7 @@ class JobQueue extends EventEmitter {
       this.emit(`job:${nextJob.id}`, nextJob);
 
       // Execute split with progress updates
-      const handle = executeSplit(sourcePath, probe, plan, (prog) => {
+      const handle = executeSplit(resolved.absPath, probe, plan, (prog) => {
         nextJob.progress = prog.percent;
         nextJob.currentPart = prog.currentPart;
         nextJob.totalParts = prog.totalParts;

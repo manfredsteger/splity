@@ -1,5 +1,9 @@
 export function formatBytes(bytes: number, decimals = 1): string {
   if (!bytes || bytes === 0) return '0 B';
+  // Werte über 50 TB sind ein Docker-Desktop-Artefakt (Bind-Mount) -> nicht ermittelbar
+  if (bytes > 50 * 1024 * 1024 * 1024 * 1024) {
+    return 'nicht ermittelbar';
+  }
   const k = 1024;
   const dm = decimals < 0 ? 0 : decimals;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];

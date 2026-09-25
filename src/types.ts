@@ -1,14 +1,19 @@
 export interface VideoItem {
   id: string;
   name: string;
+  source?: string;
+  relPath?: string;
   size: number;
   mtime: string;
+  deletable?: boolean;
   isAnalyzed: boolean;
   duration?: number;
   container?: string;
   resolution?: string;
   codec?: string;
   fps?: number;
+  keyframeIntervalAvg?: number;
+  keyframeIntervalMax?: number;
 }
 
 export interface VideoStreamInfo {
@@ -32,6 +37,7 @@ export interface ProbeResult {
   hasDataStreams: boolean;
   keyframes: number[];
   keyframeIntervalAvg: number;
+  keyframeIntervalMax?: number;
   analyzedAt: string;
 }
 

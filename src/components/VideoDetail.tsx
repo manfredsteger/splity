@@ -16,6 +16,7 @@ import { formatBytes, formatTime } from '../utils/format.js';
 import type { ProbeResult, SplitMode, SplitPlan } from '../types.js';
 
 interface VideoDetailProps {
+  videoId: string;
   probe: ProbeResult;
   onBack: () => void;
   onStartSplit: (mode: SplitMode) => void;
@@ -24,6 +25,7 @@ interface VideoDetailProps {
 }
 
 export const VideoDetail: React.FC<VideoDetailProps> = ({
+  videoId,
   probe,
   onBack,
   onStartSplit,
@@ -45,7 +47,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   // Fetch plan with debounce 150ms
   useEffect(() => {
     const timer = setTimeout(() => {
-      fetch(`/api/videos/${encodeURIComponent(probe.filename)}/plan`, {
+      fetch(`/api/videos/${encodeURIComponent(videoId)}/plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: currentMode }),
@@ -65,7 +67,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
     }, 150);
 
     return () => clearTimeout(timer);
-  }, [probe.filename, modeType, partCount, everyMinutes]);
+  }, [videoId, modeType, partCount, everyMinutes]);
 
   // Keyboard navigation: Enter = cut, ArrowUp/ArrowDown = parts +1 / -1
   useEffect(() => {
@@ -160,7 +162,10 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
 
           <div className="shrink-0 bg-blue-50 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/50 rounded-xl px-3.5 py-2 text-xs text-blue-700 dark:text-blue-300">
             <div className="font-semibold">Keyframe-Abstand</div>
-            <div>etwa alle {probe.keyframeIntervalAvg.toFixed(1)} s</div>
+            <div>
+              etwa alle {probe.keyframeIntervalAvg.toFixed(1)} s
+              {typeof probe.keyframeIntervalMax === 'number' && `, maximal ${probe.keyframeIntervalMax.toFixed(1)} s`}
+            </div>
           </div>
         </div>
       </div>
@@ -318,7 +323,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                     {/* Lazy loaded thumbnail */}
                     <div className="w-16 h-10 rounded-lg bg-zinc-200 dark:bg-zinc-700 overflow-hidden shrink-0 relative">
                       <img
-                        src={`/api/videos/${encodeURIComponent(probe.filename)}/thumb?t=${p.start}`}
+                        src={`/api/videos/${encodeURIComponent(videoId)}/thumb?t=${p.start}`}
                         alt={`Teil ${p.index}`}
                         loading="lazy"
                         className="w-full h-full object-cover"

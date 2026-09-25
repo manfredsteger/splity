@@ -139,9 +139,11 @@ export function executeSplit(
     const sourceSize = sourceStat.size;
 
     // 1. Check free disk space: free < size * 1.05 -> error
+    // Werte über 50 TB sind ein Docker-Desktop-Artefakt (Bind-Mount) -> Prüfung überspringen
+    const MAX_REALISTIC_FREE_BYTES = 50 * 1024 * 1024 * 1024 * 1024; // 50 TB
     const freeBytes = await getFreeDiskBytes(SPLITY_DIR);
     const requiredBytes = sourceSize * 1.05;
-    if (freeBytes < requiredBytes) {
+    if (freeBytes < MAX_REALISTIC_FREE_BYTES && freeBytes < requiredBytes) {
       const freeGb = (freeBytes / (1024 * 1024 * 1024)).toFixed(1);
       const reqGb = (requiredBytes / (1024 * 1024 * 1024)).toFixed(1);
       throw new Error(`Nicht genug Speicherplatz (frei: ${freeGb} GB, benötigt: ${reqGb} GB)`);

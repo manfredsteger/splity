@@ -19,7 +19,16 @@ export interface ProbeResult {
   hasDataStreams: boolean;
   keyframes: number[]; // Relative seconds from 0, sorted
   keyframeIntervalAvg: number; // Average gap in seconds
+  keyframeIntervalMax: number; // Maximum gap in seconds
   analyzedAt: string;
+}
+
+export interface ResolvedVideo {
+  source: string;
+  relPath: string;
+  absPath: string;
+  displayName: string;
+  deletable: boolean;
 }
 
 export type SplitMode =

@@ -49,10 +49,10 @@ export const ResultCard: React.FC<ResultCardProps> = ({
             </div>
             <div>
               <h2 className="text-xl sm:text-2xl font-bold text-emerald-950 dark:text-emerald-100">
-                {fileCount} {fileCount === 1 ? 'Datei' : 'Dateien'} in {durationSec} s erstellt, verlustfrei
+                {fileCount} {fileCount === 1 ? 'Datei' : 'Dateien'} in {durationSec} s erstellt
               </h2>
               <p className="text-sm text-emerald-800 dark:text-emerald-300 mt-0.5">
-                Direkt per Segment-Muxer ohne Qualitätsverlust auf deiner Festplatte gespeichert.
+                Direkt per Segment-Muxer auf deiner Festplatte gespeichert.
               </p>
             </div>
           </div>
