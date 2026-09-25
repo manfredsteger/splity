@@ -70,12 +70,16 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             const isCancelled = job.status === 'cancelled';
             const isLib = job.source === 'lib' || job.videoId.startsWith('lib:');
 
-            const modeLabel =
-              job.mode.type === 'count'
-                ? `${job.mode.n} Teile`
-                : job.mode.type === 'every'
-                ? `Alle ${Math.round(job.mode.seconds / 60)} min`
-                : `${job.mode.times.length + 1} Teile (Marker)`;
+            const isSceneJob = job.type === 'scenes';
+            const modeLabel = isSceneJob
+              ? `Szenenerkennung${job.scenes ? ` (${job.scenes.scenes.length} Szenen)` : ''}`
+              : job.mode.type === 'count'
+              ? `${job.mode.n} Teile`
+              : job.mode.type === 'every'
+              ? `Alle ${Math.round(job.mode.seconds / 60)} min`
+              : job.mode.origin === 'scenes'
+              ? `Szenen (${job.mode.times.length + 1} Teile)`
+              : `${job.mode.times.length + 1} Teile (Marker)`;
 
             return (
               <div
@@ -128,7 +132,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     {/* Status Badge & Actions */}
                     <div className="flex items-center gap-3 shrink-0">
                       {/* Prüfung Indicator */}
-                      {isDone && (
+                      {isDone && !isSceneJob && (
                         <div className="text-xs flex items-center gap-1">
                           <span className="text-zinc-400 font-medium">Prüfung:</span>
                           {job.result?.verification ? (
@@ -156,7 +160,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       {isDone && (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Fertig ({job.result?.files.length || job.totalParts} Dateien)</span>
+                          <span>{isSceneJob ? `Fertig (${job.scenes?.scenes.length ?? job.totalParts} Szenen)` : `Fertig (${job.result?.files.length || job.totalParts} Dateien)`}</span>
                         </span>
                       )}
 

@@ -123,10 +123,37 @@ export function planSplit(
     );
   }
 
+  // Mindestlänge je Teil (nur points-Modus, Default 5 s): Teile, die kürzer wären, mit dem
+  // vorherigen verschmelzen – dazu den Schnittpunkt streichen. Der letzte Teil zählt auch.
+  let cuts: Cut[] = finalCuts;
+  if (mode.type === 'points') {
+    const minLen = mode.minPartSeconds ?? 5;
+    if (minLen > 0) {
+      const kept: Cut[] = [];
+      let lastStart = 0;
+      for (const c of finalCuts) {
+        if (c.actualTime - lastStart >= minLen) {
+          kept.push(c);
+          lastStart = c.actualTime;
+        }
+      }
+      while (kept.length > 0 && duration - kept[kept.length - 1].actualTime < minLen) {
+        kept.pop();
+      }
+      const merged = finalCuts.length - kept.length;
+      if (merged > 0) {
+        warnings.push(
+          `${merged} Schnitt${merged === 1 ? '' : 'e'} wegen Mindestlänge ${minLen} s mit dem vorherigen Teil zusammengelegt.`
+        );
+      }
+      cuts = kept;
+    }
+  }
+
   // Generate parts from cuts
   const boundaryPoints = [
     0,
-    ...finalCuts.map((c) => c.actualTime),
+    ...cuts.map((c) => c.actualTime),
     Math.round(duration * 1000) / 1000,
   ];
 
@@ -143,12 +170,12 @@ export function planSplit(
   }
 
   const maxDeltaSeconds =
-    finalCuts.length > 0
-      ? Math.max(...finalCuts.map((c) => Math.abs(c.deltaSeconds)))
+    cuts.length > 0
+      ? Math.max(...cuts.map((c) => Math.abs(c.deltaSeconds)))
       : 0;
 
   return {
-    cuts: finalCuts,
+    cuts,
     parts,
     warnings,
     maxDeltaSeconds: Math.round(maxDeltaSeconds * 1000) / 1000,

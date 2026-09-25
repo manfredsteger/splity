@@ -2,11 +2,19 @@ import React, { useMemo } from 'react';
 import { formatTime } from '../utils/format.js';
 import type { Cut, Part } from '../types.js';
 
+export interface TimelineMarker {
+  time: number;
+  active: boolean;
+  label?: string;
+}
+
 interface TimelineProps {
   duration: number;
   parts: Part[];
   cuts: Cut[];
   keyframes: number[];
+  /** Szenengrenzen: aktiv = wird geschnitten (grün), inaktiv = nur Markierung (grau) */
+  markers?: TimelineMarker[];
   activePartIndex?: number;
   onHoverPart?: (index: number | null) => void;
 }
@@ -16,6 +24,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   parts,
   cuts,
   keyframes,
+  markers,
   activePartIndex,
   onHoverPart,
 }) => {
@@ -91,6 +100,25 @@ export const Timeline: React.FC<TimelineProps> = ({
         })}
       </div>
 
+      {/* Szenen-Marker (über der Keyframe-Reihe) */}
+      {markers && markers.length > 0 && (
+        <div className="relative w-full h-2.5 px-0.5">
+          {markers.map((m, i) => {
+            const leftPercent = Math.min(100, Math.max(0, (m.time / duration) * 100));
+            return (
+              <div
+                key={i}
+                className={`absolute top-0 -translate-x-1/2 w-0 h-0 border-l-[5px] border-r-[5px] border-b-[8px] border-l-transparent border-r-transparent ${
+                  m.active ? 'border-b-emerald-500' : 'border-b-zinc-400 dark:border-b-zinc-600 opacity-60'
+                }`}
+                style={{ left: `${leftPercent}%` }}
+                title={m.label || `Szene bei ${formatTime(m.time)}`}
+              />
+            );
+          })}
+        </div>
+      )}
+
       {/* Keyframe tick marks */}
       <div className="relative w-full h-2 px-0.5 overflow-hidden">
         <div className="absolute inset-0 flex items-center">
@@ -113,9 +141,17 @@ export const Timeline: React.FC<TimelineProps> = ({
           <span className="w-2 h-2 rounded-sm bg-blue-600 inline-block" />
           <span>{parts.length} Teile berechnet</span>
         </span>
-        <span className="flex items-center gap-1">
-          <span className="w-1 h-2 bg-zinc-400 inline-block" />
-          <span>{keyframes.length} Keyframes im Video</span>
+        <span className="flex items-center gap-3">
+          {markers && markers.length > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="w-0 h-0 border-l-[4px] border-r-[4px] border-b-[6px] border-l-transparent border-r-transparent border-b-emerald-500 inline-block" />
+              <span>{markers.filter((m) => m.active).length} von {markers.length} Szenengrenzen aktiv</span>
+            </span>
+          )}
+          <span className="flex items-center gap-1">
+            <span className="w-1 h-2 bg-zinc-400 inline-block" />
+            <span>{keyframes.length} Keyframes im Video</span>
+          </span>
         </span>
       </div>
     </div>

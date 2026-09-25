@@ -4,15 +4,16 @@ import path from 'node:path';
 import { JOBS_FILE, loadSettings } from './config.js';
 import { planSplit } from './media/plan.js';
 import { probeVideo } from './media/probe.js';
-import { executeSplit, type SplitExecutionHandle } from './media/split.js';
+import { detectScenes } from './media/scenes.js';
+import { executeSplit } from './media/split.js';
 import { verifyParts } from './media/verify.js';
 import { decodeVideoId, resolveVideo } from './sources.js';
-import type { Job, SplitMode } from './types.js';
+import type { Job, SceneParams, SplitMode } from './types.js';
 
 class JobQueue extends EventEmitter {
   private jobs: Job[] = [];
   private activeJob: Job | null = null;
-  private activeHandle: SplitExecutionHandle | null = null;
+  private activeHandle: { cancel: () => void } | null = null;
   private isProcessing = false;
 
   constructor() {
@@ -89,6 +90,7 @@ class JobQueue extends EventEmitter {
     const source = decoded?.source || (videoId.startsWith('lib:') ? 'lib' : 'inbox');
     const job: Job = {
       id,
+      type: 'split',
       videoId,
       videoName,
       source,
@@ -106,6 +108,33 @@ class JobQueue extends EventEmitter {
     this.emit(`job:${id}`, job);
     this.emit('queue:update', this.jobs);
 
+    this.processNext();
+    return job;
+  }
+
+  /** Szenenerkennung als eigener Job-Typ – läuft in derselben Warteschlange (ein ffmpeg zurzeit). */
+  public addSceneJob(videoId: string, videoName: string, params: SceneParams): Job {
+    const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const decoded = decodeVideoId(videoId);
+    const source = decoded?.source || (videoId.startsWith('lib:') ? 'lib' : 'inbox');
+    const job: Job = {
+      id,
+      type: 'scenes',
+      videoId,
+      videoName,
+      source,
+      mode: { type: 'points', times: [], origin: 'scenes' },
+      sceneParams: params,
+      status: 'queued',
+      progress: 0,
+      currentPart: 0,
+      totalParts: 0,
+      createdAt: new Date().toISOString(),
+    };
+    this.jobs.unshift(job);
+    this.saveJobs();
+    this.emit(`job:${id}`, job);
+    this.emit('queue:update', this.jobs);
     this.processNext();
     return job;
   }
@@ -151,7 +180,7 @@ class JobQueue extends EventEmitter {
     this.isProcessing = true;
     this.activeJob = nextJob;
     nextJob.status = 'running';
-    nextJob.phase = 'split';
+    nextJob.phase = nextJob.type === 'scenes' ? 'scenes' : 'split';
     nextJob.progress = 0;
     this.saveJobs();
     this.emit(`job:${nextJob.id}`, nextJob);
@@ -165,6 +194,37 @@ class JobQueue extends EventEmitter {
 
       // Analyze source video
       const probe = await probeVideo(resolved, nextJob.videoId);
+      if ((nextJob.status as string) === 'cancelled') {
+        return;
+      }
+
+      if (nextJob.type === 'scenes' && nextJob.sceneParams) {
+        nextJob.phase = 'scenes';
+        this.emit(`job:${nextJob.id}`, nextJob);
+        const handle = detectScenes(resolved, probe, nextJob.sceneParams, (pct) => {
+          if (pct !== nextJob.progress) {
+            nextJob.progress = pct;
+            this.emit(`job:${nextJob.id}`, nextJob);
+          }
+        });
+        this.activeHandle = handle;
+        const scenes = await handle.promise;
+        this.activeHandle = null;
+        if ((nextJob.status as string) === 'cancelled') {
+          return;
+        }
+        nextJob.status = 'done';
+        nextJob.progress = 100;
+        nextJob.scenes = scenes;
+        nextJob.totalParts = scenes.scenes.length;
+        nextJob.finishedAt = new Date().toISOString();
+        nextJob.durationSeconds = Math.round(scenes.durationMs / 100) / 10;
+        this.saveJobs();
+        this.emit(`job:${nextJob.id}`, nextJob);
+        this.emit('queue:update', this.jobs);
+        return;
+      }
+
       // Calculate split plan
       const plan = planSplit(probe.duration, probe.keyframes, nextJob.mode);
       if ((nextJob.status as string) === 'cancelled') {

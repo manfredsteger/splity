@@ -77,4 +77,27 @@ describe('planSplit', () => {
     expect(plan.warnings.length).toBe(1);
     expect(plan.warnings[0]).toContain('zu wenige Keyframes für 20 Teile, es werden 4 Teile');
   });
+
+  it('points-Modus: Mindestlänge verschmilzt zu kurze Teile mit dem vorherigen', () => {
+    const keyframes = Array.from({ length: 31 }, (_, i) => i); // jede Sekunde ein Keyframe
+    const plan = planSplit(30, keyframes, { type: 'points', times: [8, 10, 11, 20, 28], minPartSeconds: 5 });
+    // 8 ok (8 s), 10 zu kurz (2 s), 11 zu kurz (3 s), 20 ok (12 s), 28 -> letzter Teil nur 2 s -> weg
+    expect(plan.cuts.map((c) => c.actualTime)).toEqual([8, 20]);
+    expect(plan.parts.length).toBe(3);
+    expect(plan.warnings.some((w) => w.includes('3 Schnitte wegen Mindestlänge 5 s'))).toBe(true);
+  });
+
+  it('points-Modus: minPartSeconds 0 schaltet das Verschmelzen ab', () => {
+    const keyframes = Array.from({ length: 31 }, (_, i) => i);
+    const plan = planSplit(30, keyframes, { type: 'points', times: [1, 2, 3], minPartSeconds: 0 });
+    expect(plan.cuts.length).toBe(3);
+  });
+
+  it('points-Modus: Punkte werden auf den nächsten Keyframe gelegt, Abweichung ausgewiesen', () => {
+    const keyframes = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30];
+    const plan = planSplit(30, keyframes, { type: 'points', times: [10.9, 21.2], origin: 'scenes' });
+    expect(plan.cuts.map((c) => c.actualTime)).toEqual([10, 22]);
+    expect(plan.cuts[0].deltaSeconds).toBeCloseTo(-0.9, 3);
+    expect(plan.maxDeltaSeconds).toBeCloseTo(0.9, 3);
+  });
 });

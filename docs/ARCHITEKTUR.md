@@ -137,6 +137,14 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 
 ---
 
+## Szenenerkennung (Post 5)
+
+- `server/media/scenes.ts`: `ffmpeg -i <datei> -an -sn -dn -vf "scale=320:-2,scdet=threshold=<T>[,blackdetect=d=0.3:pic_th=0.98]" -f null -` mit `-progress pipe:1`. Das ist die **einzige Stelle, die decodiert** – die Quelle bleibt unverändert. Verkleinerung auf 320 px macht es um ein Vielfaches schneller.
+- stderr-Zeilen `lavfi.scd.score: …, lavfi.scd.time: …` (Szenenwechsel) und `black_start:… black_end:…` (Schwarzbild, Schnitt am Beginn) werden geparst. **Die Zeiten sind bereits relativ zum Dateianfang** (anders als ffprobe-Pakete, getestet mit TS-Offset 101 s). Grenzen näher als 0,5 s werden zusammengelegt (Szene schlägt Schwarzbild).
+- Empfindlichkeit: niedrig = 15, mittel = 10 (Default), hoch = 6. Cache: `DATA_DIR/cache/<key>_scenes_<T>_<black|plain>.json`.
+- Läuft als Job-Typ `scenes` in derselben Warteschlange (ein ffmpeg zurzeit), Fortschritt per SSE wie beim Schnitt. Ergebnis im Job (`job.scenes`), nicht in `result`.
+- Der Schnitt nutzt den bestehenden Modus `points` mit `minPartSeconds` (Default 5 s: kürzere Teile verschmelzen mit dem vorherigen, der letzte Teil zählt mit) und `origin: 'scenes'` (nur für den Verlauf). Jeder Punkt landet auf dem nächsten Keyframe; Grenzen > 1 s neben einem Keyframe zeigt die UI orange.
+
 ## 5. Nicht verändern (Goldene Regeln)
 
 1. **Dockerfile**: `COPY package.json ./`, **nicht** `package*.json`! Die Datei `.dockerignore` muss zwingend erhalten bleiben.

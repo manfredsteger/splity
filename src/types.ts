@@ -44,7 +44,31 @@ export interface ProbeResult {
 export type SplitMode =
   | { type: 'count'; n: number }
   | { type: 'every'; seconds: number }
-  | { type: 'points'; times: number[] };
+  | { type: 'points'; times: number[]; minPartSeconds?: number; origin?: 'scenes' | 'manual' };
+
+export type SceneSensitivity = 'low' | 'mid' | 'high';
+
+export interface SceneParams {
+  threshold: number;
+  black: boolean;
+}
+
+export interface Scene {
+  index: number;
+  start: number;
+  end: number;
+  duration: number;
+  score: number;
+  kind: 'start' | 'scene' | 'black';
+}
+
+export interface SceneDetectionResult {
+  threshold: number;
+  black: boolean;
+  scenes: Scene[];
+  durationMs: number;
+  analyzedAt: string;
+}
 
 export interface Cut {
   idealTime: number;
@@ -74,7 +98,8 @@ export interface SplitResultFile {
   duration: number;
 }
 
-export type JobPhase = 'split' | 'verify';
+export type JobPhase = 'split' | 'verify' | 'scenes';
+export type JobType = 'split' | 'scenes';
 
 export interface StreamVerification {
   kind: 'video' | 'audio';
@@ -103,10 +128,13 @@ export interface SplitResult {
 
 export interface Job {
   id: string;
+  type?: JobType;
   videoId: string;
   videoName: string;
   source?: string;
   mode: SplitMode;
+  sceneParams?: SceneParams;
+  scenes?: SceneDetectionResult;
   status: JobStatus;
   phase?: JobPhase;
   progress: number;

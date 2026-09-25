@@ -15,8 +15,9 @@ import {
   startVideoAnalysis,
 } from '../media/probe.js';
 import { sanitizeFileName } from '../media/split.js';
+import { getCachedScenes, SENSITIVITY_THRESHOLDS } from '../media/scenes.js';
 import { encodeVideoId, listVideos, resolveVideo } from '../sources.js';
-import type { SplitMode } from '../types.js';
+import type { SceneParams, SplitMode } from '../types.js';
 
 export const videosRouter = Router();
 
@@ -37,7 +38,16 @@ function parseSplitMode(raw: unknown): SplitMode | null {
     if (!Array.isArray(mode.times)) return null;
     const times = mode.times.map(Number);
     if (times.some((t) => !Number.isFinite(t) || t < 0)) return null;
-    return { type: 'points', times };
+    const result: SplitMode = { type: 'points', times };
+    if (mode.minPartSeconds !== undefined) {
+      const minLen = Number(mode.minPartSeconds);
+      if (!Number.isFinite(minLen) || minLen < 0 || minLen > 3600) return null;
+      result.minPartSeconds = minLen;
+    }
+    if (mode.origin === 'scenes' || mode.origin === 'manual') {
+      result.origin = mode.origin;
+    }
+    return result;
   }
   return null;
 }
@@ -348,6 +358,65 @@ videosRouter.get('/:id/thumb', async (req, res, next) => {
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
     fs.createReadStream(thumbPath).pipe(res);
+  } catch (err: any) {
+    next(err);
+  }
+});
+
+// Szenen-Parameter prüfen: threshold als Zahl (3–40) oder Stufe low/mid/high, black als Boolean
+function parseSceneParams(raw: unknown): SceneParams | null {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  let threshold: number;
+  if (typeof obj.threshold === 'string' && obj.threshold in SENSITIVITY_THRESHOLDS) {
+    threshold = SENSITIVITY_THRESHOLDS[obj.threshold as keyof typeof SENSITIVITY_THRESHOLDS];
+  } else if (obj.threshold === undefined) {
+    threshold = SENSITIVITY_THRESHOLDS.mid;
+  } else {
+    threshold = Number(obj.threshold);
+    if (!Number.isFinite(threshold) || threshold < 3 || threshold > 40) return null;
+  }
+  const black = obj.black === true || obj.black === 'true' || obj.black === '1';
+  return { threshold, black };
+}
+
+// GET /api/videos/:id/scenes?threshold=&black= - Ergebnis aus dem Cache oder 404
+videosRouter.get('/:id/scenes', (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
+      return res.status(404).json({ error: 'Video nicht gefunden.' });
+    }
+    const params = parseSceneParams(req.query);
+    if (!params) {
+      return res.status(400).json({ error: 'Ungültige Szenen-Parameter.' });
+    }
+    const cached = getCachedScenes(resolved, params);
+    if (!cached) {
+      return res.status(404).json({ error: 'Noch keine Szenenerkennung für diese Einstellung.' });
+    }
+    res.json(cached);
+  } catch (err: any) {
+    next(err);
+  }
+});
+
+// POST /api/videos/:id/scenes { threshold, black } - Szenenerkennung als Job starten
+videosRouter.post('/:id/scenes', (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
+      return res.status(404).json({ error: 'Video nicht gefunden.' });
+    }
+    const params = parseSceneParams(req.body);
+    if (!params) {
+      return res.status(400).json({ error: 'Ungültige Szenen-Parameter.' });
+    }
+    const cached = getCachedScenes(resolved, params);
+    if (cached) {
+      return res.json({ ok: true, cached: true, scenes: cached });
+    }
+    const job = jobQueue.addSceneJob(req.params.id, resolved.displayName, params);
+    res.json({ ok: true, cached: false, jobId: job.id, job });
   } catch (err: any) {
     next(err);
   }

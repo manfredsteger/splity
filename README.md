@@ -63,3 +63,7 @@ SPLITY_PATH=/Users/DEINNAME/Movies/Splity
 ## 🔒 Datenschutz & Lokalität
 
 Splity läuft zu 100 % lokal. Es werden weder Cloud-Dienste noch KI-Modelle oder externe Server kontaktiert. Sämtliche Videodaten bleiben auf deiner eigenen Festplatte.
+
+## Szenen
+
+Modus „An Szenen“: Splity erkennt Szenenwechsel (optional auch Schwarzbilder), zeigt sie als Streifen mit Vorschaubildern und schneidet an den gewählten Grenzen – wie immer verlustfrei am nächsten Keyframe.

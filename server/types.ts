@@ -34,7 +34,43 @@ export interface ResolvedVideo {
 export type SplitMode =
   | { type: 'count'; n: number }
   | { type: 'every'; seconds: number }
-  | { type: 'points'; times: number[] };
+  | {
+      type: 'points';
+      times: number[];
+      /** Teile, die kürzer wären, werden mit dem vorherigen verschmolzen (Default 5 s). */
+      minPartSeconds?: number;
+      /** Woher die Punkte stammen – nur für die Anzeige im Verlauf. */
+      origin?: 'scenes' | 'manual';
+    };
+
+// Szenenerkennung
+export type SceneSensitivity = 'low' | 'mid' | 'high';
+
+export interface SceneParams {
+  /** scdet-Schwelle: niedrig=15, mittel=10, hoch=6 */
+  threshold: number;
+  /** Schwarzbilder (blackdetect) zusätzlich als Szenengrenze */
+  black: boolean;
+}
+
+export interface Scene {
+  index: number;
+  start: number;
+  end: number;
+  duration: number;
+  /** scdet-Score der Grenze am Szenenanfang (0 bei der ersten Szene) */
+  score: number;
+  /** Wie die Grenze am Szenenanfang gefunden wurde */
+  kind: 'start' | 'scene' | 'black';
+}
+
+export interface SceneDetectionResult {
+  threshold: number;
+  black: boolean;
+  scenes: Scene[];
+  durationMs: number;
+  analyzedAt: string;
+}
 
 export interface Cut {
   idealTime: number;
@@ -64,7 +100,8 @@ export interface SplitResultFile {
   duration: number;
 }
 
-export type JobPhase = 'split' | 'verify';
+export type JobPhase = 'split' | 'verify' | 'scenes';
+export type JobType = 'split' | 'scenes';
 
 export interface StreamVerification {
   kind: 'video' | 'audio';
@@ -93,10 +130,15 @@ export interface SplitResult {
 
 export interface Job {
   id: string;
+  /** Fehlt bei alten Jobs -> 'split' */
+  type?: JobType;
   videoId: string;
   videoName: string;
   source?: string;
   mode: SplitMode;
+  /** Nur bei type 'scenes' */
+  sceneParams?: SceneParams;
+  scenes?: SceneDetectionResult;
   status: JobStatus;
   phase?: JobPhase;
   progress: number; // 0 to 100
