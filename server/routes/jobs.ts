@@ -64,6 +64,15 @@ jobsRouter.get('/:id/events', (req, res) => {
   });
 });
 
+// GET /api/jobs/:id - Single job
+jobsRouter.get('/:id', (req, res) => {
+  const job = jobQueue.getJob(req.params.id);
+  if (!job) {
+    return res.status(404).json({ error: 'Job nicht gefunden.' });
+  }
+  res.json(job);
+});
+
 // POST /api/jobs/:id/cancel - Cancel a queued or running job
 jobsRouter.post('/:id/cancel', (req, res) => {
   const success = jobQueue.cancelJob(req.params.id);

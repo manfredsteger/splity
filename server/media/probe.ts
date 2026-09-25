@@ -189,7 +189,7 @@ function runFfprobeKeyframes(filePath: string): Promise<number[]> {
       '-select_streams',
       'v:0',
       '-show_entries',
-      'packet=pts_time,flags',
+      'packet=pts_time,dts_time,flags',
       '-of',
       'csv=p=0',
       filePath,
@@ -209,16 +209,19 @@ function runFfprobeKeyframes(filePath: string): Promise<number[]> {
     });
 
     rl.on('line', (line) => {
-      // Line format: e.g. "0.000000,K__" or "0.000000,K"
+      // Line format: "pts_time,dts_time,flags", e.g. "0.000000,0.000000,K__"
+      // pts_time kann bei MKV "N/A" sein, dann dts_time nehmen.
       const parts = line.split(',');
-      if (parts.length >= 2) {
+      if (parts.length >= 3) {
         const ptsStr = parts[0].trim();
-        const flags = parts[1].trim();
+        const dtsStr = parts[1].trim();
+        const flags = parts[2].trim();
+        const timeStr = ptsStr && ptsStr !== 'N/A' ? ptsStr : dtsStr;
 
-        if (ptsStr && ptsStr !== 'N/A' && flags.includes('K')) {
-          const pts = parseFloat(ptsStr);
-          if (!Number.isNaN(pts)) {
-            keyframes.push(pts);
+        if (timeStr && timeStr !== 'N/A' && flags.includes('K')) {
+          const t = parseFloat(timeStr);
+          if (!Number.isNaN(t)) {
+            keyframes.push(t);
           }
         }
       }

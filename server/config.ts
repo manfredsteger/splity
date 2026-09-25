@@ -13,9 +13,8 @@ function resolvePort(): number {
       return parseInt(args[i].split('=')[1], 10);
     }
   }
-  if (process.env.NODE_ENV !== 'production') {
-    return 3000;
-  }
+  // Regel 2: PORT immer aus der Umgebung – auch im Dev-Modus (make dev setzt PORT=3007,
+  // 3000 ist auf dem Mac von Open WebUI belegt).
   return process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 }
 
@@ -74,6 +73,21 @@ export function ensureDirectories(): void {
           fs.rmSync(tmpPath, { recursive: true, force: true });
         } catch {
           // ignore cleanup errors on startup
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // Abgebrochene Uploads (.part) aus einem früheren Lauf entfernen
+  try {
+    for (const entry of fs.readdirSync(EINGANG_DIR, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.part')) {
+        try {
+          fs.rmSync(path.join(EINGANG_DIR, entry.name), { force: true });
+        } catch {
+          // ignore
         }
       }
     }

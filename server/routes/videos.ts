@@ -17,6 +17,30 @@ function getSafeVideoPath(id: string): { baseName: string; fullPath: string } {
   return { baseName, fullPath };
 }
 
+// Schnittmodus aus dem Request-Body strikt prüfen: Ohne Prüfung wird z. B. n="abc" still zu
+// einem einzigen Teil, statt mit 400 zu antworten.
+function parseSplitMode(raw: unknown): SplitMode | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const mode = raw as Record<string, unknown>;
+  if (mode.type === 'count') {
+    const n = Number(mode.n);
+    if (!Number.isInteger(n) || n < 2 || n > 200) return null;
+    return { type: 'count', n };
+  }
+  if (mode.type === 'every') {
+    const seconds = Number(mode.seconds);
+    if (!Number.isFinite(seconds) || seconds < 10) return null;
+    return { type: 'every', seconds };
+  }
+  if (mode.type === 'points') {
+    if (!Array.isArray(mode.times)) return null;
+    const times = mode.times.map(Number);
+    if (times.some((t) => !Number.isFinite(t) || t < 0)) return null;
+    return { type: 'points', times };
+  }
+  return null;
+}
+
 function findUniqueUploadFileName(baseName: string): string {
   const ext = path.extname(baseName);
   const nameWithoutExt = path.basename(baseName, ext);
@@ -100,6 +124,9 @@ videosRouter.post('/upload', (req, res, next) => {
   let currentTargetPath: string | null = null;
   let fileError: string | null = null;
   let bytesWritten = 0;
+  // Busboy meldet 'close', bevor der Schreib-Stream fertig ist. Ohne Warten antwortet der
+  // Server "Keine Datei empfangen", obwohl die Datei gleich darauf korrekt auf der Platte liegt.
+  let writeDone: Promise<void> = Promise.resolve();
 
   bb.on('file', (fieldname, file, info) => {
     let rawFilename = info.filename || 'video.mp4';
@@ -127,6 +154,10 @@ videosRouter.post('/upload', (req, res, next) => {
     currentPartPath = path.join(EINGANG_DIR, `.${uniqueName}.part`);
 
     const writeStream = fs.createWriteStream(currentPartPath);
+    writeDone = new Promise<void>((resolve) => {
+      writeStream.on('finish', () => resolve());
+      writeStream.on('error', () => resolve());
+    });
 
     file.on('data', (data) => {
       bytesWritten += data.length;
@@ -184,7 +215,8 @@ videosRouter.post('/upload', (req, res, next) => {
     return res.status(500).json({ error: `Upload abgebrochen: ${err.message}` });
   });
 
-  bb.on('close', () => {
+  bb.on('close', async () => {
+    await writeDone;
     if (fileError) {
       if (currentPartPath && fs.existsSync(currentPartPath)) {
         try {
@@ -248,8 +280,8 @@ videosRouter.post('/:id/plan', async (req, res, next) => {
       return res.status(404).json({ error: 'Video nicht gefunden.' });
     }
 
-    const mode = req.body.mode as SplitMode;
-    if (!mode || !mode.type) {
+    const mode = parseSplitMode(req.body.mode);
+    if (!mode) {
       return res.status(400).json({ error: 'Ungültiger Schnittmodus übergeben.' });
     }
 
@@ -270,8 +302,8 @@ videosRouter.post('/:id/split', async (req, res, next) => {
       return res.status(404).json({ error: 'Video nicht gefunden.' });
     }
 
-    const mode = req.body.mode as SplitMode;
-    if (!mode || !mode.type) {
+    const mode = parseSplitMode(req.body.mode);
+    if (!mode) {
       return res.status(400).json({ error: 'Ungültiger Schnittmodus übergeben.' });
     }
 
@@ -289,9 +321,12 @@ videosRouter.delete('/:id', (req, res, next) => {
       return res.status(400).json({ error: 'Löschen erfordert Bestätigung (?confirm=1).' });
     }
 
-    const { fullPath } = getSafeVideoPath(req.params.id);
+    const { baseName, fullPath } = getSafeVideoPath(req.params.id);
     if (!fs.existsSync(fullPath)) {
       return res.status(404).json({ error: 'Video nicht gefunden.' });
+    }
+    if (jobQueue.isVideoBusy(baseName)) {
+      return res.status(409).json({ error: 'Das Video wird gerade geschnitten und kann nicht gelöscht werden.' });
     }
 
     fs.rmSync(fullPath, { force: true });

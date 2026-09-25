@@ -21,7 +21,7 @@ Splity ist eine selbst gehostete Web-Anwendung, die Videos **verlustfrei** (ohne
 /
 ├── .dockerignore              Ausschlüsse für den Docker-Build
 ├── .env.example               Beispiel-Umgebungsvariable (SPLITY_PATH)
-├── Dockerfile                 Multi-Stage Build (node:22-bookworm-slim + ffmpeg)
+├── Dockerfile                 Multi-Stage Build (node:22-trixie-slim + ffmpeg 7.1)
 ├── docker-compose.yml         Docker-Service Definition (Port 3006:3000)
 ├── Makefile                   Setup-, Start- und Steuerungsbefehle
 ├── package.json               Abhängigkeiten und Scripts
@@ -119,7 +119,7 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 
 ---
 
-## 5. Nicht verändern (Zehn goldene Regeln)
+## 5. Nicht verändern (Goldene Regeln)
 
 1. **Dockerfile**: `COPY package.json ./`, **nicht** `package*.json`! Die Datei `.dockerignore` muss zwingend erhalten bleiben.
 2. **PORT**: Niemals hartkodieren, immer `process.env.PORT` bzw. CLI-Argumente beachten.
@@ -131,3 +131,11 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 8. **Keine Shell-Befehle für Medien**: `ffmpeg` und `ffprobe` dürfen ausschließlich über `child_process.spawn` mit einem Argumenten-Array aufgerufen werden.
 9. **Schneiden immer in EINEM Aufruf**: Der verlustfreie Schnitt muss immer über den Segment-Muxer in einem Aufruf erfolgen, nie über `-ss`-Schleifen.
 10. **React Hook-Disziplin**: Alle React-Hooks (`useState`, `useEffect`, `useCallback`) stehen ausnahmslos vor jedem bedingten Return.
+11. **Immer `-c copy` und `-map_metadata 0`**: Nie ein Encoder-Flag (`-c:v libx264` o. Ä.) in einem Schnitt- oder Merge-Aufruf. Ohne `-map_metadata 0` verliert der Segment-Muxer das Aufnahmedatum (`creation_time`).
+12. **Basis-Image `node:22-trixie-slim`** (ffmpeg 7.1), nicht bookworm: ffmpeg 5.1 trägt bei MOV-Dateien mit Timecode-Spur (iPhone) dem ersten Teil die Gesamtdauer des Originals ein.
+13. **Video-IDs nur über eine zentrale Auflösung** (`path.basename`, Prüfung gegen den Quellordner). Nie Pfade aus der URL direkt öffnen.
+
+### Erkenntnisse aus dem Review (2026-09-25)
+- Der Segment-Muxer bekommt Muxer-Optionen nur über `-segment_format_options` (z. B. `movflags=+faststart:strict=experimental`); ein globales `-strict` wirkt dort nicht. `strict=experimental` ist nötig für FLAC-Ton in MP4.
+- Bit-Prüfung (`-f framemd5` mit `-c copy`): Pakete **je Stream** vergleichen, nicht in der verschachtelten Ausgabereihenfolge – Video und Audio werden in den Teilen anders verzahnt als im Original, die Folge je Stream ist aber identisch.
+- Der Datenspur-Fallback (`-dn`) läuft nur, wenn die Analyse Datenstreams gemeldet hat; sonst würde die Warnung „Datenspuren weggelassen“ auch bei ganz anderen Fehlern erscheinen.

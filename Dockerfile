@@ -1,5 +1,9 @@
+# Basis-Image trixie statt bookworm: bookworm bringt ffmpeg 5.1 mit, das bei MOV-Dateien mit
+# Timecode-Spur (iPhone) dem ersten Teil die Gesamtdauer des Originals einträgt. ffmpeg 7.1
+# aus trixie macht das richtig (getestet 2026-09-25).
+
 # Stage 1: Build Frontend and Server
-FROM node:22-bookworm-slim AS builder
+FROM node:22-trixie-slim AS builder
 
 WORKDIR /app
 
@@ -15,7 +19,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production Runner
-FROM node:22-bookworm-slim AS runner
+FROM node:22-trixie-slim AS runner
 
 WORKDIR /app
 

@@ -197,7 +197,11 @@ export function executeSplit(
         args.push('-map', '0:v', '-map', '0:a?', '-map', '0:s?', '-dn');
       }
 
+      // -map_metadata 0 ist Pflicht: Ohne das Flag verliert der Segment-Muxer das
+      // Aufnahmedatum (creation_time) der Quelle.
       args.push(
+        '-map_metadata',
+        '0',
         '-c',
         'copy',
         '-f',
@@ -214,7 +218,9 @@ export function executeSplit(
       );
 
       if (targetExt === '.mp4' || targetExt === '.mov') {
-        args.push('-segment_format_options', 'movflags=+faststart');
+        // strict=experimental: FLAC-Ton in MP4 verweigert der Muxer sonst komplett. Die Option
+        // muss an den inneren MP4-Muxer gehen, ein globales -strict wirkt beim Segment-Muxer nicht.
+        args.push('-segment_format_options', 'movflags=+faststart:strict=experimental');
       }
 
       if (isHevc) {
@@ -290,7 +296,7 @@ export function executeSplit(
     // First attempt: with full stream mapping (-map 0)
     let runResult = await runFfmpeg(buildArgs(true));
 
-    if (runResult.code !== 0 && !isCancelled) {
+    if (runResult.code !== 0 && !isCancelled && probe.hasDataStreams) {
       // Automatic second attempt omitting data streams (Timecode, GPS, etc.)
       // Clean tmp folder before retry
       try {
@@ -320,8 +326,15 @@ export function executeSplit(
       if (fs.existsSync(tmpDirPath)) {
         fs.rmSync(tmpDirPath, { recursive: true, force: true });
       }
+      // Ganze Zeilen statt der letzten 400 Zeichen, sonst beginnt die Meldung mitten im Wort
+      const stderrTail = runResult.stderr
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith('Stream mapping') && !l.startsWith('Stream #'))
+        .slice(-6)
+        .join('\n');
       throw new Error(
-        `ffmpeg-Fehler beim Schneiden (Code ${runResult.code}): ${runResult.stderr.slice(-400) || 'Unbekannter Fehler'}`
+        `ffmpeg-Fehler beim Schneiden (Code ${runResult.code}): ${stderrTail || 'Unbekannter Fehler'}`
       );
     }
 

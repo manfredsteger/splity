@@ -60,6 +60,12 @@ class JobQueue extends EventEmitter {
     return this.jobs.find((j) => j.id === id);
   }
 
+  public isVideoBusy(videoId: string): boolean {
+    return this.jobs.some(
+      (j) => j.videoId === videoId && (j.status === 'queued' || j.status === 'running')
+    );
+  }
+
   public addJob(videoId: string, videoName: string, mode: SplitMode): Job {
     const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const job: Job = {
@@ -98,17 +104,18 @@ class JobQueue extends EventEmitter {
       return true;
     }
 
-    if (job.status === 'running' && this.activeJob?.id === id && this.activeHandle) {
+    if (job.status === 'running' && this.activeJob?.id === id) {
+      // Während der Analyse (vor executeSplit) gibt es noch keinen ffmpeg-Prozess: Dann nur den
+      // Status setzen, processNext bricht nach der Analyse ab. Sonst ffmpeg beenden.
       job.status = 'cancelled';
       job.finishedAt = new Date().toISOString();
       job.error = 'Vom Benutzer abgebrochen';
-      this.activeHandle.cancel();
-      this.activeJob = null;
-      this.activeHandle = null;
+      if (this.activeHandle) {
+        this.activeHandle.cancel();
+      }
       this.saveJobs();
       this.emit(`job:${id}`, job);
       this.emit('queue:update', this.jobs);
-      this.processNext();
       return true;
     }
 
@@ -140,6 +147,9 @@ class JobQueue extends EventEmitter {
       const probe = await probeVideo(sourcePath);
       // Calculate split plan
       const plan = planSplit(probe.duration, probe.keyframes, nextJob.mode);
+      if ((nextJob.status as string) === 'cancelled') {
+        return; // während der Analyse abgebrochen
+      }
       nextJob.totalParts = plan.parts.length;
       this.emit(`job:${nextJob.id}`, nextJob);
 
