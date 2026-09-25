@@ -55,7 +55,14 @@ function extractFramemd5(
       crlfDelay: Infinity,
     });
 
+    let killed = false;
     rl.on('line', (line) => {
+      // Beim Abbruch den ffmpeg-Prozess beenden, sonst liest er die Datei still zu Ende
+      if (!killed && isCancelled && isCancelled()) {
+        killed = true;
+        child.kill('SIGTERM');
+        return;
+      }
       const trimmed = line.trim();
       if (!trimmed) return;
 
