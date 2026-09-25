@@ -55,21 +55,35 @@ export function findUniqueDirectoryName(baseDir: string, desiredName: string): s
   return candidate;
 }
 
+export function formatHms(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, '0')}-${String(m).padStart(2, '0')}-${String(s).padStart(2, '0')}`;
+}
+
 export function formatPartFileName(
   pattern: string,
   baseName: string,
   partIndex: number,
   totalParts: number,
-  ext: string
+  ext: string,
+  startSeconds = 0,
+  endSeconds = 0
 ): string {
   const padLength = totalParts >= 100 ? 3 : 2;
   const nrStr = String(partIndex).padStart(padLength, '0');
   const totalStr = String(totalParts).padStart(padLength, '0');
+  const startStr = formatHms(startSeconds);
+  const endeStr = formatHms(endSeconds);
 
   let name = pattern
     .replace(/\{name\}/g, baseName)
     .replace(/\{nr\}/g, nrStr)
-    .replace(/\{gesamt\}/g, totalStr);
+    .replace(/\{gesamt\}/g, totalStr)
+    .replace(/\{start\}/g, startStr)
+    .replace(/\{ende\}/g, endeStr);
 
   name = sanitizeFileName(name);
   if (!name.endsWith(ext)) {
@@ -363,12 +377,15 @@ export function executeSplit(
       const rawPath = path.join(tmpDirPath, rawName);
       const partIndex = i + 1;
 
+      const part = plan.parts[i];
       const finalPartName = formatPartFileName(
         settings.namePattern,
         cleanBaseName,
         partIndex,
         generatedRawFiles.length,
-        targetExt
+        targetExt,
+        part?.start ?? 0,
+        part?.end ?? 0
       );
 
       const newPath = path.join(tmpDirPath, finalPartName);

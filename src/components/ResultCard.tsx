@@ -37,27 +37,81 @@ export const ResultCard: React.FC<ResultCardProps> = ({
 
   const fileCount = result.files.length;
   const durationSec = result.durationSeconds || 1;
+  const verification = result.verification;
+
+  // Packet counts for badge
+  const videoPackets =
+    verification?.streams
+      .filter((s) => s.kind === 'video')
+      .reduce((sum, s) => sum + s.packetsOriginal, 0) || 0;
+  const audioPackets =
+    verification?.streams
+      .filter((s) => s.kind === 'audio')
+      .reduce((sum, s) => sum + s.packetsOriginal, 0) || 0;
+
+  const isFailedVerification = verification && !verification.ok;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300">
-      {/* Green Success Banner Card */}
-      <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 rounded-3xl p-6 sm:p-8 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-lg shadow-emerald-500/20">
-              <CheckCircle2 className="w-8 h-8" />
-            </div>
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-emerald-950 dark:text-emerald-100">
-                {fileCount} {fileCount === 1 ? 'Datei' : 'Dateien'} in {durationSec} s erstellt
-              </h2>
-              <p className="text-sm text-emerald-800 dark:text-emerald-300 mt-0.5">
-                Direkt per Segment-Muxer auf deiner Festplatte gespeichert.
-              </p>
+      {/* Red card on verification failure */}
+      {isFailedVerification ? (
+        <div className="bg-red-50 dark:bg-red-950/40 border-2 border-red-500/80 rounded-3xl p-6 sm:p-8 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-red-600/20">
+                <AlertTriangle className="w-8 h-8" />
+              </div>
+              <div>
+                <h2 className="text-xl sm:text-2xl font-bold text-red-950 dark:text-red-100">
+                  Prüfung fehlgeschlagen
+                </h2>
+                <p className="text-sm text-red-800 dark:text-red-300 mt-1 font-medium">
+                  {verification.errorMessage || 'Die erzeugten Teildateien weichen vom Original ab.'}
+                </p>
+                <p className="text-xs text-red-700/80 dark:text-red-400 mt-1">
+                  Die Teildateien wurden dennoch in den Ausgabeordner geschrieben.
+                </p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      ) : (
+        /* Green Success Banner Card */
+        <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 rounded-3xl p-6 sm:p-8 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-lg shadow-emerald-500/20">
+                <CheckCircle2 className="w-8 h-8" />
+              </div>
+              <div>
+                <h2 className="text-xl sm:text-2xl font-bold text-emerald-950 dark:text-emerald-100">
+                  {fileCount} {fileCount === 1 ? 'Datei' : 'Dateien'} in {durationSec} s erstellt
+                </h2>
+                <p className="text-sm text-emerald-800 dark:text-emerald-300 mt-0.5">
+                  Direkt per Segment-Muxer auf deiner Festplatte gespeichert.
+                </p>
+
+                {/* Verification badge */}
+                {verification && !verification.skipped && verification.ok && (
+                  <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-semibold shadow-xs">
+                    <Check className="w-4 h-4" />
+                    <span>
+                      ✓ Verifiziert: {videoPackets.toLocaleString('de-DE')} Video- und{' '}
+                      {audioPackets.toLocaleString('de-DE')} Audio-Pakete bit-identisch mit dem Original
+                    </span>
+                  </div>
+                )}
+
+                {verification && verification.skipped && (
+                  <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-medium">
+                    <span>Prüfung übersprungen</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Output Path Card with Copy Button */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">

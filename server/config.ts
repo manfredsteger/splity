@@ -33,7 +33,26 @@ export const JOBS_FILE = path.join(DATA_DIR, 'jobs.json');
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultParts: 8,
   namePattern: '{name} - Teil {nr} von {gesamt}',
+  verifyAfterSplit: true,
 };
+
+export function isValidNamePattern(pattern: string): boolean {
+  if (typeof pattern !== 'string' || !pattern.trim()) return false;
+  // Muster muss {nr} enthalten
+  if (!pattern.includes('{nr}')) return false;
+
+  // Erlaubte Platzhalter
+  const allowed = ['{name}', '{nr}', '{gesamt}', '{start}', '{ende}'];
+  let testStr = pattern;
+  for (const ph of allowed) {
+    testStr = testStr.split(ph).join('');
+  }
+  // Wenn noch andere {platzhalter} übrig sind, ist das Muster ungültig
+  if (/\{[^}]*\}/.test(testStr)) {
+    return false;
+  }
+  return true;
+}
 
 export const ALLOWED_EXTENSIONS = new Set([
   '.mp4',
@@ -106,8 +125,18 @@ export function loadSettings(): AppSettings {
     if (fs.existsSync(SETTINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
       return {
-        defaultParts: typeof data.defaultParts === 'number' && data.defaultParts >= 2 ? data.defaultParts : DEFAULT_SETTINGS.defaultParts,
-        namePattern: typeof data.namePattern === 'string' && data.namePattern.trim() ? data.namePattern.trim() : DEFAULT_SETTINGS.namePattern,
+        defaultParts:
+          typeof data.defaultParts === 'number' && data.defaultParts >= 2 && data.defaultParts <= 200
+            ? data.defaultParts
+            : DEFAULT_SETTINGS.defaultParts,
+        namePattern:
+          typeof data.namePattern === 'string' && isValidNamePattern(data.namePattern)
+            ? data.namePattern.trim()
+            : DEFAULT_SETTINGS.namePattern,
+        verifyAfterSplit:
+          typeof data.verifyAfterSplit === 'boolean'
+            ? data.verifyAfterSplit
+            : DEFAULT_SETTINGS.verifyAfterSplit,
       };
     }
   } catch {
@@ -119,12 +148,20 @@ export function loadSettings(): AppSettings {
 export function saveSettings(settings: Partial<AppSettings>): AppSettings {
   const current = loadSettings();
   const updated: AppSettings = {
-    defaultParts: typeof settings.defaultParts === 'number' && settings.defaultParts >= 2 && settings.defaultParts <= 200
-      ? settings.defaultParts
-      : current.defaultParts,
-    namePattern: typeof settings.namePattern === 'string' && settings.namePattern.trim()
-      ? settings.namePattern.trim()
-      : current.namePattern,
+    defaultParts:
+      typeof settings.defaultParts === 'number' &&
+      settings.defaultParts >= 2 &&
+      settings.defaultParts <= 200
+        ? settings.defaultParts
+        : current.defaultParts,
+    namePattern:
+      typeof settings.namePattern === 'string' && isValidNamePattern(settings.namePattern)
+        ? settings.namePattern.trim()
+        : current.namePattern,
+    verifyAfterSplit:
+      typeof settings.verifyAfterSplit === 'boolean'
+        ? settings.verifyAfterSplit
+        : current.verifyAfterSplit,
   };
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf-8');
   return updated;

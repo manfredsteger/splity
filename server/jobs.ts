@@ -5,6 +5,7 @@ import { JOBS_FILE, loadSettings } from './config.js';
 import { planSplit } from './media/plan.js';
 import { probeVideo } from './media/probe.js';
 import { executeSplit, type SplitExecutionHandle } from './media/split.js';
+import { verifyParts } from './media/verify.js';
 import { resolveVideo } from './sources.js';
 import type { Job, SplitMode } from './types.js';
 
@@ -141,6 +142,7 @@ class JobQueue extends EventEmitter {
     this.isProcessing = true;
     this.activeJob = nextJob;
     nextJob.status = 'running';
+    nextJob.phase = 'split';
     nextJob.progress = 0;
     this.saveJobs();
     this.emit(`job:${nextJob.id}`, nextJob);
@@ -172,6 +174,53 @@ class JobQueue extends EventEmitter {
 
       this.activeHandle = handle;
       const result = await handle.promise;
+      this.activeHandle = null;
+
+      if ((nextJob.status as string) === 'cancelled') {
+        return;
+      }
+
+      // Verification phase
+      const currentSettings = loadSettings();
+      if (currentSettings.verifyAfterSplit) {
+        nextJob.phase = 'verify';
+        nextJob.progress = 0;
+        this.saveJobs();
+        this.emit(`job:${nextJob.id}`, nextJob);
+        this.emit('queue:update', this.jobs);
+
+        const partPaths = result.files.map((f) => path.join(result.outputDir, f.name));
+        const estimatedPackets = Math.max(
+          100,
+          Math.round(probe.duration * (probe.video?.fps || 30) * 2)
+        );
+
+        const verification = await verifyParts(resolved.absPath, partPaths, {
+          onProgress: (packetsProcessed, estTotal) => {
+            if ((nextJob.status as string) !== 'running') return;
+            const targetTotal = estTotal || estimatedPackets;
+            const pct = Math.min(99, Math.round((packetsProcessed / targetTotal) * 100));
+            if (pct !== nextJob.progress) {
+              nextJob.progress = pct;
+              this.emit(`job:${nextJob.id}`, nextJob);
+            }
+          },
+          isCancelled: () => (nextJob.status as string) === 'cancelled',
+        });
+
+        result.verification = verification;
+
+        if (!verification.ok && verification.errorMessage) {
+          result.warnings.push(`Prüfung fehlgeschlagen: ${verification.errorMessage}`);
+        }
+      } else {
+        result.verification = {
+          ok: true,
+          skipped: true,
+          streams: [],
+          durationMs: 0,
+        };
+      }
 
       if (nextJob.status === 'running') {
         nextJob.status = 'done';

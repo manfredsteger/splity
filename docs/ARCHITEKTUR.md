@@ -139,3 +139,32 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 - Der Segment-Muxer bekommt Muxer-Optionen nur über `-segment_format_options` (z. B. `movflags=+faststart:strict=experimental`); ein globales `-strict` wirkt dort nicht. `strict=experimental` ist nötig für FLAC-Ton in MP4.
 - Bit-Prüfung (`-f framemd5` mit `-c copy`): Pakete **je Stream** vergleichen, nicht in der verschachtelten Ausgabereihenfolge – Video und Audio werden in den Teilen anders verzahnt als im Original, die Folge je Stream ist aber identisch.
 - Der Datenspur-Fallback (`-dn`) läuft nur, wenn die Analyse Datenstreams gemeldet hat; sonst würde die Warnung „Datenspuren weggelassen“ auch bei ganz anderen Fehlern erscheinen.
+
+---
+
+## 6. Prüfung (Bit-Identitäts-Beweis)
+
+Splity beweist nach jedem Schnitt (abschaltbar in den Einstellungen via `verifyAfterSplit`), dass die erzeugten Teildateien bit-identisch mit dem Original sind:
+
+1. **Paket-Hashes ohne Decodieren**:
+   ```bash
+   ffmpeg -v error -i <datei> -map 0:v -map 0:a? -c copy -f framemd5 -
+   ```
+   liefert für jedes einzelne Video- und Audio-Paket Prüfsummen (`md5`) und Paketgrößen (`size`), ohne die CPU mit dem Decodieren von Bildern zu belasten.
+2. **Stromweiser Vergleich (`verifySequence`)**:
+   Das Original wird einmal gelesen und die Folge von `(size, md5)` je Stream gesammelt. Danach werden alle Teildateien in Schnitt-Reihenfolge eingelesen.
+   Die aneinandergehängte Folge der Pakete der Teile **muss je Stream exakt der Folge des Originals entsprechen** (gleiche Paketanzahl, identische Hashes, identische Reihenfolge).
+3. **Ergebnis und Transparenz**:
+   - Stimmen alle Pakete überein, zeigt die UI: `✓ Verifiziert: X Video- und Y Audio-Pakete bit-identisch mit dem Original`.
+   - Weicht auch nur ein einzelnes Paket ab, bleibt der Job-Status auf `done`, aber die UI zeigt eine rote Fehlerkarte: `Prüfung fehlgeschlagen: Videospur 0 weicht ab Paket 1234 ab`. Kein stiller falscher Erfolg.
+
+---
+
+## 7. Bekannte Grenzen ("Was verlustfrei heißt")
+
+Beim verlustfreien Schneiden werden komprimierte Bitströme ohne Transcoding kopiert. Dabei gelten vier naturgegebene Grenzen:
+
+1. **Keyframe-Bindung**: Schnitte liegen ausnahmslos auf Video-Keyframes (I-Frames). Die maximale Abweichung vom idealen Schnittzeitpunkt wird vor dem Schnitt in der UI angezeigt.
+2. **Audio-Versatz (20–40 ms)**: Da Audio-Frames (z. B. AAC mit 1024 Samples ≈ 21,3 ms oder 23,2 ms) nie exakt synchron auf den Video-Keyframe-Grenzen liegen, beginnt der Ton in den Teilen bis zu ein Audio-Frame versetzt.
+3. **Open-GOP-HEVC**: Bei Videos mit Open-GOP (Standard bei `x265`, jedoch nicht bei iPhone-Aufnahmen) referenzieren die ersten B-Frames eines GOPs Bilder vor dem Keyframe. Player überspringen diese ersten Bilder bei der Wiedergabe; alle Daten sind in den Teilen jedoch vollständig und intakt vorhanden.
+4. **Datenspuren**: Spezielle Metadatenspuren (wie Apple Timecode `tmcd`, GPS- oder Kameradaten) können beim MP4-Muxen fehlschlagen und werden im automatischen zweiten Versuch weggelassen. Bild- und Tonspuren werden jedoch niemals weggelassen oder verändert.

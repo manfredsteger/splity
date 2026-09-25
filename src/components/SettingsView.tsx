@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   Folder,
   HardDrive,
+  Info,
   Save,
   Server,
-  Terminal,
+  ShieldCheck,
   Wrench,
   XCircle,
 } from 'lucide-react';
@@ -28,20 +30,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [namePattern, setNamePattern] = useState(
     settings.namePattern || '{name} - Teil {nr} von {gesamt}'
   );
+  const [verifyAfterSplit, setVerifyAfterSplit] = useState(
+    settings.verifyAfterSplit ?? true
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   useEffect(() => {
     setDefaultParts(settings.defaultParts || 8);
     setNamePattern(settings.namePattern || '{name} - Teil {nr} von {gesamt}');
+    setVerifyAfterSplit(settings.verifyAfterSplit ?? true);
   }, [settings]);
+
+  const hasNrPlaceholder = namePattern.includes('{nr}');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasNrPlaceholder) {
+      setValidationError('Das Namensmuster muss zwingend den Platzhalter {nr} enthalten.');
+      return;
+    }
+    setValidationError(null);
     setIsSaving(true);
     const ok = await onSaveSettings({
       defaultParts: Math.max(2, Math.min(200, Number(defaultParts))),
       namePattern: namePattern.trim() || '{name} - Teil {nr} von {gesamt}',
+      verifyAfterSplit,
     });
     setIsSaving(false);
     if (ok) {
@@ -51,10 +66,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   // Live pattern preview example
-  const previewExample = namePattern
-    .replace(/\{name\}/g, 'Urlaubsvideo')
-    .replace(/\{nr\}/g, '01')
-    .replace(/\{gesamt\}/g, String(defaultParts).padStart(2, '0')) + '.mp4';
+  const previewExample =
+    namePattern
+      .replace(/\{name\}/g, 'Urlaubsvideo')
+      .replace(/\{nr\}/g, '01')
+      .replace(/\{gesamt\}/g, String(defaultParts).padStart(2, '0'))
+      .replace(/\{start\}/g, '00-00-00')
+      .replace(/\{ende\}/g, '00-05-30') + '.mp4';
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-200">
@@ -63,7 +81,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           Einstellungen
         </h2>
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          Standardwerte für Schnitt und Benennung der erzeugten Teildateien
+          Standardwerte für Schnitt, Benennung und automatische Bit-Prüfung
         </p>
       </div>
 
@@ -98,14 +116,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <input
                 type="text"
                 value={namePattern}
-                onChange={(e) => setNamePattern(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                onChange={(e) => {
+                  setNamePattern(e.target.value);
+                  if (validationError) setValidationError(null);
+                }}
+                className={`w-full px-3.5 py-2.5 rounded-xl border font-mono text-sm focus:outline-hidden focus:ring-2 ${
+                  !hasNrPlaceholder
+                    ? 'border-red-400 dark:border-red-600 focus:ring-red-500'
+                    : 'border-zinc-300 dark:border-zinc-700 focus:ring-blue-500'
+                } bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100`}
               />
               <p className="text-xs text-zinc-400 mt-1">
                 Platzhalter: <code className="text-blue-500 font-mono">{'{name}'}</code>,{' '}
-                <code className="text-blue-500 font-mono">{'{nr}'}</code>,{' '}
-                <code className="text-blue-500 font-mono">{'{gesamt}'}</code>
+                <code className="text-blue-500 font-mono">{'{nr}'}</code> (Pflicht),{' '}
+                <code className="text-blue-500 font-mono">{'{gesamt}'}</code>,{' '}
+                <code className="text-blue-500 font-mono">{'{start}'}</code>,{' '}
+                <code className="text-blue-500 font-mono">{'{ende}'}</code>
               </p>
+              {!hasNrPlaceholder && (
+                <p className="text-xs text-red-500 font-medium mt-1">
+                  Muster muss zwingend {'{nr}'} enthalten!
+                </p>
+              )}
             </div>
           </div>
 
@@ -119,6 +151,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
+          {/* Verification Option */}
+          <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800">
+            <label className="flex items-start gap-3 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={verifyAfterSplit}
+                onChange={(e) => setVerifyAfterSplit(e.target.checked)}
+                className="mt-1 w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-zinc-300 dark:border-zinc-700 cursor-pointer"
+              />
+              <div className="space-y-0.5">
+                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>Nach dem Schnitt prüfen</span>
+                </div>
+                <div className="text-xs text-zinc-500 dark:text-zinc-400 max-w-2xl leading-relaxed">
+                  Liest Original und Teile einmal komplett, ohne zu decodieren, und vergleicht alle Video- und Audio-Pakete auf Bit-Identität per framemd5 (bei 20 GB etwa eine Minute).
+                </div>
+              </div>
+            </label>
+          </div>
+
+          {validationError && (
+            <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 text-xs font-semibold">
+              {validationError}
+            </div>
+          )}
+
           <div className="flex items-center justify-end gap-3 pt-2">
             {savedSuccess && (
               <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
@@ -128,12 +187,66 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             )}
             <button
               type="submit"
-              disabled={isSaving}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm transition-colors cursor-pointer shadow-sm shadow-blue-600/20"
+              disabled={isSaving || !hasNrPlaceholder}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-300 dark:disabled:bg-zinc-800 text-white font-semibold text-sm transition-colors cursor-pointer shadow-sm shadow-blue-600/20 disabled:cursor-not-allowed"
             >
               <Save className="w-4 h-4" />
               <span>{isSaving ? 'Wird gespeichert...' : 'Speichern'}</span>
             </button>
+          </div>
+        </div>
+
+        {/* Section: Was verlustfrei heißt (Die 4 Grenzen) */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-xs space-y-4">
+          <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+            <Info className="w-4 h-4 text-blue-600" />
+            <span>Was verlustfrei heißt</span>
+          </h3>
+
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            Beim verlustfreien Schnitt werden die komprimierten Datenpakete unverändert kopiert. Es gelten vier technische Grenzen:
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 space-y-1">
+              <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-[11px] flex items-center justify-center font-mono shrink-0">1</span>
+                <span>Keyframe-Bindung</span>
+              </div>
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed pl-6.5">
+                Schnitte liegen immer auf Keyframes (Abweichung wird in der Vorschau angezeigt). Nur dort existiert ein vollständiges I-Frame ohne Referenz zu vorherigen Bildern.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 space-y-1">
+              <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-[11px] flex items-center justify-center font-mono shrink-0">2</span>
+                <span>Audio-Versatz (20–40 ms)</span>
+              </div>
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed pl-6.5">
+                Ton beginnt bis zu ein Audio-Frame (20–40 ms) versetzt, weil Audio-Pakete nie exakt synchron auf Video-Keyframes liegen.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 space-y-1">
+              <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-[11px] flex items-center justify-center font-mono shrink-0">3</span>
+                <span>Open-GOP-HEVC</span>
+              </div>
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed pl-6.5">
+                Bei Open-GOP-HEVC (x265-Standard, nicht iPhone) können erste Bilder eines Teils vom Player übersprungen werden; die Daten sind vollständig erhalten.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 space-y-1">
+              <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 text-[11px] flex items-center justify-center font-mono shrink-0">4</span>
+                <span>Datenspuren</span>
+              </div>
+              <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed pl-6.5">
+                Datenspuren (Timecode, GPS) werden notfalls weggelassen, wenn der MP4-Muxer sonst scheitert – Bild und Ton werden niemals verändert.
+              </p>
+            </div>
           </div>
         </div>
 

@@ -34,6 +34,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>({
     defaultParts: 8,
     namePattern: '{name} - Teil {nr} von {gesamt}',
+    verifyAfterSplit: true,
   });
 
   // Videos & Queue

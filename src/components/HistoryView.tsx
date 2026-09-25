@@ -105,14 +105,40 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Status Badge & Actions */}
-                  <div className="flex items-center gap-3 shrink-0">
-                    {isDone && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Fertig ({job.result?.files.length || job.totalParts} Dateien)</span>
-                      </span>
-                    )}
+                    {/* Status Badge & Actions */}
+                    <div className="flex items-center gap-3 shrink-0">
+                      {/* Prüfung Indicator */}
+                      {isDone && (
+                        <div className="text-xs flex items-center gap-1">
+                          <span className="text-zinc-400 font-medium">Prüfung:</span>
+                          {job.result?.verification ? (
+                            job.result.verification.skipped ? (
+                              <span className="font-mono text-zinc-400 font-bold px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800" title="Prüfung übersprungen">
+                                –
+                              </span>
+                            ) : job.result.verification.ok ? (
+                              <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/60" title="Bit-identisch verifiziert">
+                                ✓
+                              </span>
+                            ) : (
+                              <span className="font-mono text-red-600 dark:text-red-400 font-bold px-1.5 py-0.5 rounded bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800/60" title={job.result.verification.errorMessage || 'Prüfung fehlgeschlagen'}>
+                                ✗
+                              </span>
+                            )
+                          ) : (
+                            <span className="font-mono text-zinc-400 font-bold px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800">
+                              –
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {isDone && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Fertig ({job.result?.files.length || job.totalParts} Dateien)</span>
+                        </span>
+                      )}
 
                     {isRunning && (
                       <div className="flex items-center gap-2">

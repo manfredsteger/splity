@@ -64,12 +64,31 @@ export interface SplitResultFile {
   duration: number;
 }
 
+export type JobPhase = 'split' | 'verify';
+
+export interface StreamVerification {
+  kind: 'video' | 'audio';
+  index: number;
+  packetsOriginal: number;
+  packetsParts: number;
+  firstMismatchAt?: number;
+}
+
+export interface VerificationResult {
+  ok: boolean;
+  skipped?: boolean;
+  streams: StreamVerification[];
+  durationMs: number;
+  errorMessage?: string;
+}
+
 export interface SplitResult {
   outputDir: string;
   hostOutputDir: string;
   files: SplitResultFile[];
   warnings: string[];
   durationSeconds: number;
+  verification?: VerificationResult;
 }
 
 export interface Job {
@@ -78,6 +97,7 @@ export interface Job {
   videoName: string;
   mode: SplitMode;
   status: JobStatus;
+  phase?: JobPhase;
   progress: number; // 0 to 100
   currentPart: number;
   totalParts: number;
@@ -91,6 +111,7 @@ export interface Job {
 export interface AppSettings {
   defaultParts: number;
   namePattern: string;
+  verifyAfterSplit: boolean;
 }
 
 export interface HealthInfo {
