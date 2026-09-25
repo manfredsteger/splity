@@ -1,0 +1,17 @@
+services:
+  splity:
+    build: .
+    container_name: splity
+    restart: unless-stopped
+    ports:
+      - "3006:3000"
+    volumes:
+      - ./data:/app/data
+      - ${SPLITY_PATH:?Bitte SPLITY_PATH in .env setzen}:/app/splity
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - TZ=Europe/Berlin
+      - DATA_DIR=/app/data
+      - SPLITY_DIR=/app/splity
+      - SPLITY_HOST_PATH=${SPLITY_PATH}

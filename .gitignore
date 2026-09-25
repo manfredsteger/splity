@@ -1,0 +1,11 @@
+node_modules/
+dist/
+server/dist/
+data/
+splity/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+

@@ -1,11 +1,65 @@
-<div align="center">
+# Splity ✂️
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+**Splity** ist eine selbst gehostete Web-App, die Videos **verlustfrei** in Teile schneidet – ohne Neukodierung, ohne Qualitätsverlust, in Sekunden.
 
-  <h1>Built with AI Studio</h2>
+Inspiriert von Desktop-Tools wie LosslessCut, aber radikal vereinfacht:
+1. Video per Drag & Drop reinziehen (oder im Mac-Eingangsordner ablegen)
+2. Gewünschte Teileanzahl wählen (z. B. 8 Teile)
+3. Auf "Schneiden" klicken – fertig!
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+Die Teildateien landen sofort sortiert in einem Ordner auf deinem Mac.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+---
 
-</div>
+## 🚀 Schnellstart
+
+Mit einem einzigen Befehl einrichten und starten:
+
+```bash
+make setup
+```
+
+Der Befehl erledigt alles automatisch:
+- Erstellt die `.env`-Datei aus `.env.example` und setzt deinen macOS-Benutzernamen ein.
+- Erstellt die Ordner `Eingang` und `Fertig` unter `~/Movies/Splity/`.
+- Baut das Docker-Image und startet den Container im Hintergrund.
+- Öffnet die App unter **http://localhost:3006**.
+
+---
+
+## 🛠 Weitere Befehle
+
+| Befehl | Funktion |
+|---|---|
+| `make setup` | Initiales Setup & Start von Docker |
+| `make prod` | Startet den Docker-Container |
+| `make dev` | Startet den lokalen Entwicklungsmodus (`http://localhost:3007`) |
+| `make test` | Führt die Vitest-Unit-Tests für die Schnittplan-Logik aus |
+| `make logs` | Zeigt Live-Logs des Containers |
+| `make stop` | Stoppt den Docker-Container |
+| `make restart` | Startet den Container neu |
+| `make shell` | Öffnet eine Shell im Container |
+
+---
+
+## 📁 Ordnerstruktur auf deinem Rechner
+
+Im Ordner `~/Movies/Splity` (konfigurierbar in `.env`):
+- `Eingang/`: Hier kannst du Quellvideos auch manuell hineinwerfen. Splity erkennt sie automatisch.
+- `Fertig/`: Hier werden die erstellten Segmente in Unterordnern gespeichert (z. B. `Urlaub/Urlaub - Teil 01 von 08.mp4`).
+
+---
+
+## ⚙️ Umgebungsvariablen
+
+Konfigurierbar in `.env`:
+
+```env
+SPLITY_PATH=/Users/DEINNAME/Movies/Splity
+```
+
+---
+
+## 🔒 Datenschutz & Lokalität
+
+Splity läuft zu 100 % lokal. Es werden weder Cloud-Dienste noch KI-Modelle oder externe Server kontaktiert. Sämtliche Videodaten bleiben auf deiner eigenen Festplatte.

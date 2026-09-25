@@ -1,0 +1,10 @@
+node_modules
+dist
+server/dist
+data
+splity
+.env
+.env.*
+.git
+.DS_Store
+*.log
