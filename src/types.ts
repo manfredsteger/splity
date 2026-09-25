@@ -23,6 +23,16 @@ export interface VideoStreamInfo {
   fps: number;
   duration: number;
   bitrate?: number;
+  pixFmt?: string;
+  profile?: string;
+}
+
+export interface AudioStreamInfo {
+  index: number;
+  codec: string;
+  sampleRate: number;
+  channels: number;
+  language?: string;
 }
 
 export interface ProbeResult {
@@ -32,6 +42,7 @@ export interface ProbeResult {
   duration: number;
   startTime: number;
   video: VideoStreamInfo | null;
+  audio?: AudioStreamInfo[];
   audioTrackCount: number;
   subtitleTrackCount: number;
   hasDataStreams: boolean;
@@ -98,8 +109,8 @@ export interface SplitResultFile {
   duration: number;
 }
 
-export type JobPhase = 'split' | 'verify' | 'scenes';
-export type JobType = 'split' | 'scenes';
+export type JobPhase = 'split' | 'verify' | 'scenes' | 'chapters' | 'merge';
+export type JobType = 'split' | 'scenes' | 'chapters' | 'merge';
 
 export interface StreamVerification {
   kind: 'video' | 'audio';
@@ -135,6 +146,11 @@ export interface Job {
   mode: SplitMode;
   sceneParams?: SceneParams;
   scenes?: SceneDetectionResult;
+  chapterTimes?: number[];
+  chapterTitles?: string[];
+  inputIds?: string[];
+  inputNames?: string[];
+  outputName?: string;
   status: JobStatus;
   phase?: JobPhase;
   progress: number;
@@ -194,6 +210,41 @@ export interface LibraryBrowseResult {
   folders: LibraryFolder[];
   videos: LibraryVideo[];
   truncated: boolean;
+}
+
+export interface MergeProblem {
+  file: string;
+  field: string;
+  value: string;
+  expected: string;
+}
+
+export interface MergeCheckItem {
+  id: string;
+  name: string;
+  size: number;
+  duration: number;
+  container: string;
+  videoCodec: string;
+  resolution: string;
+  audioSummary: string;
+}
+
+export interface MergeCheckResult {
+  ok: boolean;
+  problems: MergeProblem[];
+  items: MergeCheckItem[];
+  totalDuration: number;
+  totalSize: number;
+  outputExt: string;
+  suggestedName?: string;
+}
+
+export interface OutputFolder {
+  name: string;
+  path: string;
+  hostPath: string;
+  videos: Array<{ id: string; name: string; size: number; mtime: string }>;
 }
 
 export interface ToastMessage {

@@ -1,9 +1,9 @@
 import React from 'react';
-import { Clock, HardDrive, Scissors, Settings } from 'lucide-react';
+import { Clock, Combine, HardDrive, Scissors, Settings } from 'lucide-react';
 import { formatBytes } from '../utils/format.js';
 import type { HealthInfo } from '../types.js';
 
-export type NavTab = 'cut' | 'history' | 'settings';
+export type NavTab = 'cut' | 'merge' | 'history' | 'settings';
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -47,6 +47,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span>Schneiden</span>
         </button>
 
+        <button
+          onClick={() => onSelectTab('merge')}
+          className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+            currentTab === 'merge'
+              ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-semibold'
+              : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800/60 hover:text-zinc-900 dark:hover:text-zinc-200'
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            <Combine className="w-4 h-4" />
+            <span>Zusammenfügen</span>
+          </div>
+          
+        </button>
         <button
           onClick={() => onSelectTab('history')}
           className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${

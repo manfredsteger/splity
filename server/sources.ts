@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ALLOWED_EXTENSIONS, EINGANG_DIR, LIBRARY_DIR } from './config.js';
+import { ALLOWED_EXTENSIONS, EINGANG_DIR, FERTIG_DIR, LIBRARY_DIR, SPLITY_HOST_PATH } from './config.js';
 import type { ResolvedVideo } from './types.js';
 
-const KNOWN_SOURCES = new Set(['inbox', 'lib']);
+// 'out' = Fertig-Ordner: fertige Teile lassen sich so zusammenfügen oder erneut schneiden (nie verändern)
+const KNOWN_SOURCES = new Set(['inbox', 'lib', 'out']);
 
 export function encodeVideoId(source: string, relPath: string): string {
   const b64 = Buffer.from(relPath, 'utf8').toString('base64url');
@@ -79,6 +80,20 @@ export function resolveVideo(id: string): ResolvedVideo | null {
       displayName: path.basename(normalized),
       deletable: true,
     };
+  }
+
+  if (source === 'out') {
+    const absPath = path.resolve(FERTIG_DIR, normalized);
+    if (!absPath.startsWith(FERTIG_DIR + path.sep)) return null;
+    try {
+      const realTarget = fs.realpathSync(absPath);
+      const realOut = fs.realpathSync(FERTIG_DIR);
+      if (!realTarget.startsWith(realOut + path.sep)) return null;
+      if (!fs.statSync(absPath).isFile()) return null;
+    } catch {
+      return null;
+    }
+    return { source: 'out', relPath: normalized, absPath, displayName: path.basename(normalized), deletable: false };
   }
 
   if (source === 'lib') {
@@ -174,4 +189,45 @@ export function listVideos(sourceName = 'inbox'): ListedVideo[] {
   // Sort newest first
   result.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return result;
+}
+
+/** Fertig-Ordner mit ihren Videodateien (nur erste Ebene, sortiert nach Name) */
+export function listOutputFolders(): Array<{
+  name: string;
+  path: string;
+  hostPath: string;
+  videos: Array<{ id: string; name: string; size: number; mtime: string }>;
+}> {
+  if (!fs.existsSync(FERTIG_DIR)) return [];
+  const folders: ReturnType<typeof listOutputFolders> = [];
+  for (const entry of fs.readdirSync(FERTIG_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const dir = path.join(FERTIG_DIR, entry.name);
+    const videos: Array<{ id: string; name: string; size: number; mtime: string }> = [];
+    try {
+      for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!f.isFile() || f.name.startsWith('.')) continue;
+        if (!ALLOWED_EXTENSIONS.has(path.extname(f.name).toLowerCase())) continue;
+        const stat = fs.statSync(path.join(dir, f.name));
+        videos.push({
+          id: encodeVideoId('out', `${entry.name}/${f.name}`),
+          name: f.name,
+          size: stat.size,
+          mtime: stat.mtime.toISOString(),
+        });
+      }
+    } catch {
+      continue;
+    }
+    if (videos.length === 0) continue;
+    videos.sort((a, b) => a.name.localeCompare(b.name, 'de', { numeric: true }));
+    folders.push({
+      name: entry.name,
+      path: entry.name,
+      hostPath: path.join(SPLITY_HOST_PATH, 'Fertig', entry.name),
+      videos,
+    });
+  }
+  folders.sort((a, b) => a.name.localeCompare(b.name, 'de', { numeric: true }));
+  return folders;
 }

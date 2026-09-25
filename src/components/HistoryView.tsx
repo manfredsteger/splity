@@ -73,6 +73,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             const isSceneJob = job.type === 'scenes';
             const modeLabel = isSceneJob
               ? `Szenenerkennung${job.scenes ? ` (${job.scenes.scenes.length} Szenen)` : ''}`
+              : job.type === 'chapters'
+              ? `Kapitel (${(job.chapterTimes?.length || 0) + 1})`
+              : job.type === 'merge'
+              ? `Zusammengefügt aus ${job.inputIds?.length || 0} Videos`
               : job.mode.type === 'count'
               ? `${job.mode.n} Teile`
               : job.mode.type === 'every'

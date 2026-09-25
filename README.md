@@ -67,3 +67,9 @@ Splity läuft zu 100 % lokal. Es werden weder Cloud-Dienste noch KI-Modelle oder
 ## Szenen
 
 Modus „An Szenen“: Splity erkennt Szenenwechsel (optional auch Schwarzbilder), zeigt sie als Streifen mit Vorschaubildern und schneidet an den gewählten Grenzen – wie immer verlustfrei am nächsten Keyframe.
+
+## Kapitel und Zusammenfügen
+
+- Im Szenen-Modus „Als Kapitel speichern“: Kopie mit bildgenauen Sprungmarken (MP4/MOV/MKV), ohne Schnitt.
+- Reiter „Zusammenfügen“: Teile aus `Fertig/` oder beliebige Videos mit gleichen Codec-Parametern verlustfrei aneinanderhängen – mit Vorprüfung und Bit-Prüfung.
+- Vorschau-Player mit Sprung zu Teilen und Szenen.

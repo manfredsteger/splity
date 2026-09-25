@@ -9,6 +9,7 @@ import { DragOverlay } from './components/DragOverlay.js';
 import { Dropzone } from './components/Dropzone.js';
 import { HistoryView } from './components/HistoryView.js';
 import { LibraryBrowser } from './components/LibraryBrowser.js';
+import { MergeView } from './components/MergeView.js';
 import { ResultCard } from './components/ResultCard.js';
 import { SettingsView } from './components/SettingsView.js';
 import { type NavTab, Sidebar } from './components/Sidebar.js';
@@ -56,7 +57,7 @@ export default function App() {
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [isStartingSplit, setIsStartingSplit] = useState(false);
   const [isCancellingJob, setIsCancellingJob] = useState(false);
-  const [resultData, setResultData] = useState<{ videoName: string; result: SplitResult } | null>(null);
+  const [resultData, setResultData] = useState<{ videoName: string; result: SplitResult; kind?: 'split' | 'chapters' | 'merge' } | null>(null);
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -437,6 +438,33 @@ export default function App() {
     [selectedVideo, probeResult, fetchJobs, addToast]
   );
 
+  // Kapitel-Export starten (Kopie mit Kapiteln, ohne Schnitt) – läuft über dieselbe Job-Anzeige
+  const handleStartChapters = useCallback(
+    async (times: number[]) => {
+      if (!selectedVideo || !probeResult) return;
+      setIsStartingSplit(true);
+      try {
+        const res = await fetch(`/api/videos/${encodeURIComponent(selectedVideo.id)}/chapters`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ times }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || 'Kapitel-Export konnte nicht gestartet werden.');
+        }
+        const data = await res.json();
+        setActiveJob(data.job);
+        fetchJobs();
+      } catch (err: any) {
+        addToast('error', err.message || 'Fehler beim Kapitel-Export.', 'Fehler');
+      } finally {
+        setIsStartingSplit(false);
+      }
+    },
+    [selectedVideo, probeResult, fetchJobs, addToast]
+  );
+
   // Subscribe to SSE events for active cutting job
   useEffect(() => {
     if (!activeJob) return;
@@ -449,13 +477,19 @@ export default function App() {
         setActiveJob(updatedJob);
 
         if (updatedJob.status === 'done') {
+          const kind = updatedJob.type === 'chapters' ? 'chapters' : updatedJob.type === 'merge' ? 'merge' : 'split';
           if (updatedJob.result) {
             setResultData({
               videoName: updatedJob.videoName,
               result: updatedJob.result,
+              kind,
             });
           }
-          addToast('success', `${updatedJob.result?.files.length || 0} Teile erstellt!`, 'Schnitt fertig');
+          if (kind === 'chapters') {
+            addToast('success', 'Kopie mit Kapiteln gespeichert.', 'Kapitel fertig');
+          } else {
+            addToast('success', `${updatedJob.result?.files.length || 0} Teile erstellt!`, 'Schnitt fertig');
+          }
           setActiveJob(null);
           eventSource.close();
           fetchJobs();
@@ -588,6 +622,7 @@ export default function App() {
         onSelectTab={(tab) => {
           setCurrentTab(tab);
           if (tab === 'history') fetchJobs();
+          if (tab === 'merge') fetchVideos();
           if (tab === 'settings') fetchHealth();
         }}
         activeJobsCount={activeJobsCount}
@@ -628,6 +663,7 @@ export default function App() {
                 <ResultCard
                   videoName={resultData.videoName}
                   result={resultData.result}
+                  kind={resultData.kind}
                   onNextVideo={() => {
                     setResultData(null);
                     setSelectedVideo(null);
@@ -656,6 +692,7 @@ export default function App() {
                     fetchVideos();
                   }}
                   onStartSplit={handleStartSplit}
+                  onStartChapters={handleStartChapters}
                   isStartingSplit={isStartingSplit}
                 />
               )}
@@ -727,6 +764,17 @@ export default function App() {
           )}
 
           {/* TAB 2: VERLAUF */}
+          {/* TAB: ZUSAMMENFÜGEN */}
+          {currentTab === 'merge' && (
+            <MergeView
+              existingVideos={existingVideos}
+              libraryHostPath={health?.paths.libraryHostPath}
+              fertigHostPath={health ? `${health.paths.splityHostPath}/Fertig` : undefined}
+              onToast={(type, message, title) => addToast(type, message, title)}
+              onJobsChanged={fetchJobs}
+            />
+          )}
+
           {currentTab === 'history' && (
             <HistoryView
               jobs={jobs}

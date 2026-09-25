@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { AlertTriangle, Check, Moon, Scissors } from 'lucide-react';
+import { AlertTriangle, Check, Moon, Play, Scissors } from 'lucide-react';
 import { formatTime } from '../utils/format.js';
 import type { Scene } from '../types.js';
 
@@ -10,6 +10,7 @@ interface SceneStripProps {
   /** Szenenanfänge (Sekunden), an denen geschnitten wird */
   activeBoundaries: Set<number>;
   onToggle: (start: number) => void;
+  onSeek?: (seconds: number) => void;
 }
 
 /** Abstand einer Zeit zum nächstgelegenen Keyframe (Sekunden) */
@@ -31,7 +32,7 @@ export function nearestKeyframeDelta(time: number, keyframes: number[]): { keyfr
   return { keyframe: best, delta: Math.abs(best - time) };
 }
 
-export const SceneStrip: React.FC<SceneStripProps> = ({ videoId, scenes, keyframes, activeBoundaries, onToggle }) => {
+export const SceneStrip: React.FC<SceneStripProps> = ({ videoId, scenes, keyframes, activeBoundaries, onToggle, onSeek }) => {
   const deltas = useMemo(
     () => new Map(scenes.map((s) => [s.index, nearestKeyframeDelta(s.start, keyframes)])),
     [scenes, keyframes]
@@ -88,6 +89,19 @@ export const SceneStrip: React.FC<SceneStripProps> = ({ videoId, scenes, keyfram
                 >
                   {isActive ? (farFromKeyframe ? <AlertTriangle className="w-3.5 h-3.5" /> : <Scissors className="w-3.5 h-3.5" />) : <Check className="w-3.5 h-3.5 opacity-0" />}
                 </div>
+              )}
+              {onSeek && (
+                <span
+                  role="button"
+                  title="Im Player anspringen"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSeek(scene.start);
+                  }}
+                  className="absolute bottom-1 right-1 w-6 h-6 rounded-md bg-white/85 dark:bg-zinc-900/85 text-zinc-800 dark:text-zinc-100 flex items-center justify-center hover:bg-blue-600 hover:text-white transition-colors"
+                >
+                  <Play className="w-3 h-3" />
+                </span>
               )}
               {scene.kind === 'black' && (
                 <div className="absolute top-1 right-1 w-6 h-6 rounded-md bg-zinc-900/80 text-white flex items-center justify-center" title="Schwarzbild">

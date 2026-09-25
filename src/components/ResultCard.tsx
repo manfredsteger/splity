@@ -15,6 +15,7 @@ import type { SplitResult } from '../types.js';
 interface ResultCardProps {
   videoName: string;
   result: SplitResult;
+  kind?: 'split' | 'chapters' | 'merge';
   onNextVideo: () => void;
   onCutAgain: () => void;
 }
@@ -22,6 +23,7 @@ interface ResultCardProps {
 export const ResultCard: React.FC<ResultCardProps> = ({
   videoName,
   result,
+  kind = 'split',
   onNextVideo,
   onCutAgain,
 }) => {
@@ -85,10 +87,18 @@ export const ResultCard: React.FC<ResultCardProps> = ({
               </div>
               <div>
                 <h2 className="text-xl sm:text-2xl font-bold text-emerald-950 dark:text-emerald-100">
-                  {fileCount} {fileCount === 1 ? 'Datei' : 'Dateien'} in {durationSec} s erstellt
+                  {kind === 'chapters'
+                    ? `Kapitel gespeichert (${durationSec} s)`
+                    : kind === 'merge'
+                    ? `Zusammengefügt in ${durationSec} s`
+                    : `${fileCount} ${fileCount === 1 ? 'Datei' : 'Dateien'} in ${durationSec} s erstellt`}
                 </h2>
                 <p className="text-sm text-emerald-800 dark:text-emerald-300 mt-0.5">
-                  Direkt per Segment-Muxer auf deiner Festplatte gespeichert.
+                  {kind === 'chapters'
+                    ? 'Kopie mit Kapiteln – bildgenau, ohne Schnitt, verlustfrei.'
+                    : kind === 'merge'
+                    ? 'Per concat-Demuxer ohne Neukodierung aneinandergehängt.'
+                    : 'Direkt per Segment-Muxer auf deiner Festplatte gespeichert.'}
                 </p>
 
                 {/* Verification badge */}
@@ -163,7 +173,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({
       {/* Files List */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 shadow-xs space-y-4">
         <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-          <span>Erzeugte Teildateien ({result.files.length})</span>
+          <span>{kind === 'split' ? 'Erzeugte Teildateien' : 'Erzeugte Dateien'} ({result.files.length})</span>
           <span>Gesamtgröße: {formatBytes(result.files.reduce((sum, f) => sum + f.size, 0))}</span>
         </div>
 
@@ -199,14 +209,14 @@ export const ResultCard: React.FC<ResultCardProps> = ({
           className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 font-semibold text-sm transition-colors cursor-pointer shadow-xs"
         >
           <RotateCcw className="w-4 h-4" />
-          <span>Gleiches Video anders schneiden</span>
+          <span>{kind === 'merge' ? 'Zurück zur Liste' : kind === 'chapters' ? 'Zurück zum Video' : 'Gleiches Video anders schneiden'}</span>
         </button>
 
         <button
           onClick={onNextVideo}
           className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm transition-colors cursor-pointer shadow-md shadow-blue-600/20"
         >
-          <span>Nächstes Video</span>
+          <span>{kind === 'merge' ? 'Weitere Videos zusammenfügen' : 'Nächstes Video'}</span>
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>

@@ -17,6 +17,8 @@ interface TimelineProps {
   markers?: TimelineMarker[];
   activePartIndex?: number;
   onHoverPart?: (index: number | null) => void;
+  /** Klick auf die Leiste springt im Player dorthin */
+  onSeek?: (seconds: number) => void;
 }
 
 export const Timeline: React.FC<TimelineProps> = ({
@@ -27,6 +29,7 @@ export const Timeline: React.FC<TimelineProps> = ({
   markers,
   activePartIndex,
   onHoverPart,
+  onSeek,
 }) => {
   // Subsample keyframes if > 2000 to keep DOM fast
   const sampledKeyframes = useMemo(() => {
@@ -53,7 +56,15 @@ export const Timeline: React.FC<TimelineProps> = ({
       </div>
 
       {/* Main Bar with parts and cuts */}
-      <div className="relative w-full h-12 rounded-xl overflow-hidden shadow-inner bg-zinc-200 dark:bg-zinc-800 flex">
+      <div
+        className={`relative w-full h-12 rounded-xl overflow-hidden shadow-inner bg-zinc-200 dark:bg-zinc-800 flex ${onSeek ? 'cursor-pointer' : ''}`}
+        onClick={(e) => {
+          if (!onSeek) return;
+          const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+          const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+          onSeek(ratio * duration);
+        }}
+      >
         {parts.map((part, idx) => {
           const widthPercent = (part.duration / duration) * 100;
           const isEven = idx % 2 === 0;

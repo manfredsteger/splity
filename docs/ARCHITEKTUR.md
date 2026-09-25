@@ -145,6 +145,13 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 - Läuft als Job-Typ `scenes` in derselben Warteschlange (ein ffmpeg zurzeit), Fortschritt per SSE wie beim Schnitt. Ergebnis im Job (`job.scenes`), nicht in `result`.
 - Der Schnitt nutzt den bestehenden Modus `points` mit `minPartSeconds` (Default 5 s: kürzere Teile verschmelzen mit dem vorherigen, der letzte Teil zählt mit) und `origin: 'scenes'` (nur für den Verlauf). Jeder Punkt landet auf dem nächsten Keyframe; Grenzen > 1 s neben einem Keyframe zeigt die UI orange.
 
+## Kapitel-Export, Vorschau-Player, Zusammenfügen (Posts 6 + 7)
+
+- **Vorschau**: `GET /api/videos/:id/stream` mit HTTP-Range (206, `Content-Range`, `Accept-Ranges`), Content-Type nach Endung. Kann der Browser das Format nicht (`canPlayType` leer oder `error`-Ereignis, z. B. MKV, manche HEVC), zeigt die UI einen Hinweis statt eines Fehlers – der Schnitt funktioniert trotzdem. Klick auf Teil, Szene (▶) oder Zeitleiste springt im Player dorthin.
+- **Kapitel** (`server/media/chapters.ts`, Job-Typ `chapters`): `ffmpeg -i video -i chapters.txt -map 0 -map_metadata 0 -map_chapters 1 -c copy` mit FFMETADATA (`TIMEBASE=1/1000`). Kapitel dürfen **bildgenau** sein, weil nichts geschnitten wird. Nur MP4/MOV/MKV. Ausgabe `Fertig/<name>/<name> (Kapitel).<ext>` + `.csv` (Start;Ende;Titel). Anschließend Bit-Prüfung Original vs. Kopie.
+- **Zusammenfügen** (`server/media/merge.ts`, Job-Typ `merge`): Vorprüfung `checkMergeCompatibility` (reine Funktion, gegen die erste Datei: Video-Codec, Auflösung, Pixelformat, Profil, Bildrate; je Tonspur Codec, Abtastrate, Kanäle; Anzahl Tonspuren). Dafür liefert die Analyse ab `probeVersion 2` alle Tonspuren (ältere Cache-Einträge werden neu analysiert). Ausführung mit dem concat-Demuxer (`-f concat -safe 0 -auto_convert 0` – **ohne `-auto_convert 0` schleust ffmpeg SPS/PPS in das erste Paket jeder Datei ein und die Ausgabe ist nicht mehr bit-identisch**; Listendatei in `DATA_DIR/tmp`, Apostrophe als `'\''`), `-map_metadata 0 -c copy -avoid_negative_ts make_zero`; Container = erste Datei; Datenspur-Fallback wie beim Schnitt. Ausgabe `Fertig/<Name> (zusammengefügt)/…`, danach `verifySequence(inputs, [output])`.
+- **Quelle `out`** (`sources.ts`): der Fertig-Ordner als dritte Videoquelle (`out:<base64url(Ordner/Datei)>`, nie löschbar), damit fertige Teile zusammengefügt oder erneut geschnitten werden können. `GET /api/merge/outputs` listet die Fertig-Ordner mit ihren Videodateien (nach Name sortiert, numerisch).
+
 ## 5. Nicht verändern (Goldene Regeln)
 
 1. **Dockerfile**: `COPY package.json ./`, **nicht** `package*.json`! Die Datei `.dockerignore` muss zwingend erhalten bleiben.
@@ -159,7 +166,7 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 10. **React Hook-Disziplin**: Alle React-Hooks (`useState`, `useEffect`, `useCallback`) stehen ausnahmslos vor jedem bedingten Return.
 11. **Immer `-c copy` und `-map_metadata 0`**: Nie ein Encoder-Flag (`-c:v libx264` o. Ä.) in einem Schnitt- oder Merge-Aufruf. Ohne `-map_metadata 0` verliert der Segment-Muxer das Aufnahmedatum (`creation_time`).
 12. **Basis-Image `node:22-trixie-slim`** (ffmpeg 7.1), nicht bookworm: ffmpeg 5.1 trägt bei MOV-Dateien mit Timecode-Spur (iPhone) dem ersten Teil die Gesamtdauer des Originals ein.
-13. **Die Bibliothek ist read-only. Splity schreibt, löscht oder benennt dort nie etwas.**
+13. **Die Bibliothek ist read-only. Splity schreibt, löscht oder benennt dort nie etwas.** Auch Dateien in `Fertig/` (Quelle `out`) werden nie verändert – nur gelesen.
 14. **Video-IDs nur über eine zentrale Auflösung** (`sources.ts`, Prüfung gegen den Quellordner und `fs.realpath`). Nie Pfade aus der URL direkt öffnen.
 
 ### Erkenntnisse aus dem Review (2026-09-25)

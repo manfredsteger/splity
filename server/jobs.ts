@@ -2,14 +2,30 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { JOBS_FILE, loadSettings } from './config.js';
+import { exportChapters } from './media/chapters.js';
+import { executeMerge, type MergeInput } from './media/merge.js';
 import { planSplit } from './media/plan.js';
 import { probeVideo } from './media/probe.js';
 import { detectScenes } from './media/scenes.js';
 import { executeSplit } from './media/split.js';
-import { verifyParts } from './media/verify.js';
+import { verifySequence } from './media/verify.js';
 import { decodeVideoId, resolveVideo } from './sources.js';
-import type { Job, SceneParams, SplitMode } from './types.js';
+import type { Job, JobPhase, JobType, ProbeResult, SceneParams, SplitMode, SplitResult } from './types.js';
 
+type NewJobFields = Pick<Job, 'type' | 'videoId' | 'videoName' | 'mode'> &
+  Partial<Pick<Job, 'sceneParams' | 'chapterTimes' | 'chapterTitles' | 'inputIds' | 'inputNames' | 'outputName'>>;
+
+const START_PHASE: Record<JobType, JobPhase> = {
+  split: 'split',
+  scenes: 'scenes',
+  chapters: 'chapters',
+  merge: 'merge',
+};
+
+/**
+ * Warteschlange für alle ffmpeg-Arbeiten (Schnitt, Szenen, Kapitel, Merge).
+ * Immer nur EIN Job gleichzeitig – die Platte ist der Flaschenhals.
+ */
 class JobQueue extends EventEmitter {
   private jobs: Job[] = [];
   private activeJob: Job | null = null;
@@ -29,19 +45,11 @@ class JobQueue extends EventEmitter {
           this.jobs = data.map((j: Job) => {
             const decoded = decodeVideoId(j.videoId);
             const source = j.source || decoded?.source || (j.videoId?.startsWith('lib:') ? 'lib' : 'inbox');
-            // Mark any running or queued jobs from previous session as error
+            // Laufende/wartende Jobs aus einer früheren Sitzung als Fehler markieren
             if (j.status === 'running' || j.status === 'queued') {
-              return {
-                ...j,
-                source,
-                status: 'error' as const,
-                error: 'Server-Neustart',
-              };
+              return { ...j, source, status: 'error' as const, error: 'Server-Neustart' };
             }
-            return {
-              ...j,
-              source,
-            };
+            return { ...j, source };
           });
           this.saveJobs();
         }
@@ -53,12 +61,15 @@ class JobQueue extends EventEmitter {
 
   private saveJobs(): void {
     try {
-      // Keep only last 50 jobs
-      const toSave = this.jobs.slice(0, 50);
-      fs.writeFileSync(JOBS_FILE, JSON.stringify(toSave, null, 2), 'utf-8');
+      fs.writeFileSync(JOBS_FILE, JSON.stringify(this.jobs.slice(0, 50), null, 2), 'utf-8');
     } catch {
       // ignore
     }
+  }
+
+  private emitJob(job: Job): void {
+    this.emit(`job:${job.id}`, job);
+    this.emit('queue:update', this.jobs);
   }
 
   public getJobs(): Job[] {
@@ -70,61 +81,23 @@ class JobQueue extends EventEmitter {
   }
 
   public isVideoBusy(videoId: string): boolean {
-    const resolved = resolveVideo(videoId);
-    const targetPath = resolved?.absPath;
-
+    const targetPath = resolveVideo(videoId)?.absPath;
     return this.jobs.some((j) => {
       if (j.status !== 'queued' && j.status !== 'running') return false;
       if (j.videoId === videoId) return true;
-      if (targetPath) {
-        const jResolved = resolveVideo(j.videoId);
-        return jResolved?.absPath === targetPath;
-      }
-      return false;
+      if (!targetPath) return false;
+      return [j.videoId, ...(j.inputIds || [])].some((id) => resolveVideo(id)?.absPath === targetPath);
     });
   }
 
-  public addJob(videoId: string, videoName: string, mode: SplitMode): Job {
+  private newJob(fields: NewJobFields): Job {
     const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const decoded = decodeVideoId(videoId);
-    const source = decoded?.source || (videoId.startsWith('lib:') ? 'lib' : 'inbox');
+    const decoded = decodeVideoId(fields.videoId);
+    const source = decoded?.source || (fields.videoId.startsWith('lib:') ? 'lib' : 'inbox');
     const job: Job = {
+      ...fields,
       id,
-      type: 'split',
-      videoId,
-      videoName,
       source,
-      mode,
-      status: 'queued',
-      progress: 0,
-      currentPart: 1,
-      totalParts: mode.type === 'count' ? mode.n : 1,
-      createdAt: new Date().toISOString(),
-    };
-
-    // Prepend new job to the list
-    this.jobs.unshift(job);
-    this.saveJobs();
-    this.emit(`job:${id}`, job);
-    this.emit('queue:update', this.jobs);
-
-    this.processNext();
-    return job;
-  }
-
-  /** Szenenerkennung als eigener Job-Typ – läuft in derselben Warteschlange (ein ffmpeg zurzeit). */
-  public addSceneJob(videoId: string, videoName: string, params: SceneParams): Job {
-    const id = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const decoded = decodeVideoId(videoId);
-    const source = decoded?.source || (videoId.startsWith('lib:') ? 'lib' : 'inbox');
-    const job: Job = {
-      id,
-      type: 'scenes',
-      videoId,
-      videoName,
-      source,
-      mode: { type: 'points', times: [], origin: 'scenes' },
-      sceneParams: params,
       status: 'queued',
       progress: 0,
       currentPart: 0,
@@ -133,86 +106,159 @@ class JobQueue extends EventEmitter {
     };
     this.jobs.unshift(job);
     this.saveJobs();
-    this.emit(`job:${id}`, job);
-    this.emit('queue:update', this.jobs);
+    this.emitJob(job);
     this.processNext();
     return job;
+  }
+
+  public addJob(videoId: string, videoName: string, mode: SplitMode): Job {
+    const job = this.newJob({ type: 'split', videoId, videoName, mode });
+    job.currentPart = 1;
+    job.totalParts = mode.type === 'count' ? mode.n : 1;
+    return job;
+  }
+
+  /** Szenenerkennung als eigener Job-Typ – läuft in derselben Warteschlange. */
+  public addSceneJob(videoId: string, videoName: string, params: SceneParams): Job {
+    return this.newJob({
+      type: 'scenes',
+      videoId,
+      videoName,
+      mode: { type: 'points', times: [], origin: 'scenes' },
+      sceneParams: params,
+    });
+  }
+
+  /** Kapitel-Export: Kopie mit Kapiteln, ohne Schnitt. */
+  public addChapterJob(videoId: string, videoName: string, times: number[], titles?: string[]): Job {
+    return this.newJob({
+      type: 'chapters',
+      videoId,
+      videoName,
+      mode: { type: 'points', times, origin: 'manual' },
+      chapterTimes: times,
+      chapterTitles: titles,
+    });
+  }
+
+  /** Zusammenfügen mehrerer Videos (concat-Demuxer). */
+  public addMergeJob(inputIds: string[], inputNames: string[], outputName?: string): Job {
+    return this.newJob({
+      type: 'merge',
+      videoId: inputIds[0],
+      videoName: outputName?.trim() || `${inputNames.length} Videos`,
+      mode: { type: 'points', times: [], origin: 'manual' },
+      inputIds,
+      inputNames,
+      outputName,
+    });
   }
 
   public cancelJob(id: string): boolean {
     const job = this.getJob(id);
     if (!job) return false;
+    const isActive = job.status === 'running' && this.activeJob?.id === id;
+    if (job.status !== 'queued' && !isActive) return false;
 
-    if (job.status === 'queued') {
-      job.status = 'cancelled';
-      job.finishedAt = new Date().toISOString();
-      job.error = 'Vom Benutzer abgebrochen';
-      this.saveJobs();
-      this.emit(`job:${id}`, job);
-      this.emit('queue:update', this.jobs);
-      return true;
+    // Während der Analyse gibt es noch keinen ffmpeg-Prozess: dann nur den Status setzen,
+    // processNext bricht danach ab. Sonst den laufenden Prozess beenden.
+    job.status = 'cancelled';
+    job.finishedAt = new Date().toISOString();
+    job.error = 'Vom Benutzer abgebrochen';
+    if (isActive && this.activeHandle) {
+      this.activeHandle.cancel();
     }
+    this.saveJobs();
+    this.emitJob(job);
+    return true;
+  }
 
-    if (job.status === 'running' && this.activeJob?.id === id) {
-      // Während der Analyse (vor executeSplit) gibt es noch keinen ffmpeg-Prozess: Dann nur den
-      // Status setzen, processNext bricht nach der Analyse ab. Sonst ffmpeg beenden.
-      job.status = 'cancelled';
-      job.finishedAt = new Date().toISOString();
-      job.error = 'Vom Benutzer abgebrochen';
-      if (this.activeHandle) {
-        this.activeHandle.cancel();
-      }
-      this.saveJobs();
-      this.emit(`job:${id}`, job);
-      this.emit('queue:update', this.jobs);
-      return true;
+  private isCancelled(job: Job): boolean {
+    return (job.status as string) === 'cancelled';
+  }
+
+  /** Bit-Prüfung Original(e) vs. Ausgabe(n) als Phase 'verify', abschaltbar per Einstellung. */
+  private async runVerification(job: Job, inputs: string[], outputs: string[], packetEstimate: number, result: SplitResult): Promise<void> {
+    if (!loadSettings().verifyAfterSplit) {
+      result.verification = { ok: true, skipped: true, streams: [], durationMs: 0 };
+      return;
     }
+    job.phase = 'verify';
+    job.progress = 0;
+    this.saveJobs();
+    this.emitJob(job);
 
-    return false;
+    const verification = await verifySequence(inputs, outputs, {
+      onProgress: (packetsProcessed, estTotal) => {
+        if (this.isCancelled(job)) return;
+        const pct = Math.min(99, Math.round((packetsProcessed / (estTotal || packetEstimate)) * 100));
+        if (pct !== job.progress) {
+          job.progress = pct;
+          this.emit(`job:${job.id}`, job);
+        }
+      },
+      isCancelled: () => this.isCancelled(job),
+    });
+    result.verification = verification;
+    if (!verification.ok && verification.errorMessage) {
+      result.warnings.push(`Prüfung fehlgeschlagen: ${verification.errorMessage}`);
+    }
+  }
+
+  private finishJob(job: Job, result: SplitResult): void {
+    job.status = 'done';
+    job.progress = 100;
+    job.finishedAt = new Date().toISOString();
+    job.durationSeconds = result.durationSeconds;
+    job.result = result;
+    this.saveJobs();
+    this.emitJob(job);
+  }
+
+  private packetEstimate(probes: ProbeResult[]): number {
+    return Math.max(100, Math.round(probes.reduce((s, p) => s + p.duration * (p.video?.fps || 30) * 2, 0)));
   }
 
   private async processNext(): Promise<void> {
     if (this.isProcessing) return;
-
     const nextJob = this.jobs.find((j) => j.status === 'queued');
     if (!nextJob) return;
 
     this.isProcessing = true;
     this.activeJob = nextJob;
     nextJob.status = 'running';
-    nextJob.phase = nextJob.type === 'scenes' ? 'scenes' : 'split';
+    nextJob.phase = START_PHASE[nextJob.type || 'split'];
     nextJob.progress = 0;
     this.saveJobs();
-    this.emit(`job:${nextJob.id}`, nextJob);
-    this.emit('queue:update', this.jobs);
+    this.emitJob(nextJob);
+
+    const onProgress = (pct: number) => {
+      if (this.isCancelled(nextJob)) return;
+      if (pct !== nextJob.progress) {
+        nextJob.progress = pct;
+        this.emit(`job:${nextJob.id}`, nextJob);
+      }
+    };
 
     try {
+      if (nextJob.type === 'merge') {
+        await this.runMerge(nextJob, onProgress);
+        return;
+      }
+
       const resolved = resolveVideo(nextJob.videoId);
       if (!resolved) {
         throw new Error(`Quelldatei nicht gefunden: ${nextJob.videoId}`);
       }
-
-      // Analyze source video
       const probe = await probeVideo(resolved, nextJob.videoId);
-      if ((nextJob.status as string) === 'cancelled') {
-        return;
-      }
+      if (this.isCancelled(nextJob)) return;
 
       if (nextJob.type === 'scenes' && nextJob.sceneParams) {
-        nextJob.phase = 'scenes';
-        this.emit(`job:${nextJob.id}`, nextJob);
-        const handle = detectScenes(resolved, probe, nextJob.sceneParams, (pct) => {
-          if (pct !== nextJob.progress) {
-            nextJob.progress = pct;
-            this.emit(`job:${nextJob.id}`, nextJob);
-          }
-        });
+        const handle = detectScenes(resolved, probe, nextJob.sceneParams, onProgress);
         this.activeHandle = handle;
         const scenes = await handle.promise;
         this.activeHandle = null;
-        if ((nextJob.status as string) === 'cancelled') {
-          return;
-        }
+        if (this.isCancelled(nextJob)) return;
         nextJob.status = 'done';
         nextJob.progress = 100;
         nextJob.scenes = scenes;
@@ -220,106 +266,88 @@ class JobQueue extends EventEmitter {
         nextJob.finishedAt = new Date().toISOString();
         nextJob.durationSeconds = Math.round(scenes.durationMs / 100) / 10;
         this.saveJobs();
-        this.emit(`job:${nextJob.id}`, nextJob);
-        this.emit('queue:update', this.jobs);
+        this.emitJob(nextJob);
         return;
       }
 
-      // Calculate split plan
-      const plan = planSplit(probe.duration, probe.keyframes, nextJob.mode);
-      if ((nextJob.status as string) === 'cancelled') {
-        return; // während der Analyse abgebrochen
+      if (nextJob.type === 'chapters' && nextJob.chapterTimes) {
+        const handle = exportChapters(resolved, probe, nextJob.chapterTimes, nextJob.chapterTitles, onProgress);
+        this.activeHandle = handle;
+        const result = await handle.promise;
+        this.activeHandle = null;
+        if (this.isCancelled(nextJob)) return;
+        const outVideo = path.join(result.outputDir, result.files[0].name);
+        await this.runVerification(nextJob, [resolved.absPath], [outVideo], this.packetEstimate([probe]), result);
+        if (this.isCancelled(nextJob)) return;
+        this.finishJob(nextJob, result);
+        return;
       }
+
+      // Standard: Schnitt
+      const plan = planSplit(probe.duration, probe.keyframes, nextJob.mode);
       nextJob.totalParts = plan.parts.length;
       this.emit(`job:${nextJob.id}`, nextJob);
 
-      // Execute split with progress updates
       const handle = executeSplit(resolved.absPath, probe, plan, (prog) => {
+        if (this.isCancelled(nextJob)) return;
         nextJob.progress = prog.percent;
         nextJob.currentPart = prog.currentPart;
         nextJob.totalParts = prog.totalParts;
         this.emit(`job:${nextJob.id}`, nextJob);
       });
-
       this.activeHandle = handle;
       const result = await handle.promise;
       this.activeHandle = null;
+      if (this.isCancelled(nextJob)) return;
 
-      if ((nextJob.status as string) === 'cancelled') {
-        return;
-      }
-
-      // Verification phase
-      const currentSettings = loadSettings();
-      if (currentSettings.verifyAfterSplit) {
-        nextJob.phase = 'verify';
-        nextJob.progress = 0;
-        this.saveJobs();
-        this.emit(`job:${nextJob.id}`, nextJob);
-        this.emit('queue:update', this.jobs);
-
-        const partPaths = result.files.map((f) => path.join(result.outputDir, f.name));
-        const estimatedPackets = Math.max(
-          100,
-          Math.round(probe.duration * (probe.video?.fps || 30) * 2)
-        );
-
-        const verification = await verifyParts(resolved.absPath, partPaths, {
-          onProgress: (packetsProcessed, estTotal) => {
-            if ((nextJob.status as string) !== 'running') return;
-            const targetTotal = estTotal || estimatedPackets;
-            const pct = Math.min(99, Math.round((packetsProcessed / targetTotal) * 100));
-            if (pct !== nextJob.progress) {
-              nextJob.progress = pct;
-              this.emit(`job:${nextJob.id}`, nextJob);
-            }
-          },
-          isCancelled: () => (nextJob.status as string) === 'cancelled',
-        });
-
-        result.verification = verification;
-
-        if (!verification.ok && verification.errorMessage) {
-          result.warnings.push(`Prüfung fehlgeschlagen: ${verification.errorMessage}`);
-        }
-      } else {
-        result.verification = {
-          ok: true,
-          skipped: true,
-          streams: [],
-          durationMs: 0,
-        };
-      }
-
-      if (nextJob.status === 'running') {
-        nextJob.status = 'done';
-        nextJob.progress = 100;
-        nextJob.currentPart = plan.parts.length;
-        nextJob.finishedAt = new Date().toISOString();
-        nextJob.durationSeconds = result.durationSeconds;
-        nextJob.result = result;
-        this.saveJobs();
-        this.emit(`job:${nextJob.id}`, nextJob);
-        this.emit('queue:update', this.jobs);
-      }
+      const partPaths = result.files.map((f) => path.join(result.outputDir, f.name));
+      await this.runVerification(nextJob, [resolved.absPath], partPaths, this.packetEstimate([probe]), result);
+      if (this.isCancelled(nextJob)) return;
+      nextJob.currentPart = plan.parts.length;
+      this.finishJob(nextJob, result);
     } catch (err: any) {
-      const currentStatus: string = nextJob.status;
-      if (currentStatus !== 'cancelled') {
+      if (!this.isCancelled(nextJob)) {
         nextJob.status = 'error';
         nextJob.finishedAt = new Date().toISOString();
-        nextJob.error = err.message || 'Unbekannter Fehler beim Schneiden';
+        nextJob.error = err.message || 'Unbekannter Fehler';
         this.saveJobs();
-        this.emit(`job:${nextJob.id}`, nextJob);
-        this.emit('queue:update', this.jobs);
+        this.emitJob(nextJob);
       }
     } finally {
       this.activeJob = null;
       this.activeHandle = null;
       this.isProcessing = false;
       this.saveJobs();
-      // Continue with remaining queue
       setTimeout(() => this.processNext(), 100);
     }
+  }
+
+  private async runMerge(job: Job, onProgress: (pct: number) => void): Promise<void> {
+    const inputs: MergeInput[] = [];
+    for (const id of job.inputIds || []) {
+      const resolved = resolveVideo(id);
+      if (!resolved) throw new Error(`Quelldatei nicht gefunden: ${id}`);
+      const probe = await probeVideo(resolved, id);
+      if (this.isCancelled(job)) return;
+      inputs.push({ id, resolved, probe });
+    }
+    const handle = executeMerge(inputs, job.outputName, onProgress);
+    this.activeHandle = handle;
+    const result = await handle.promise;
+    this.activeHandle = null;
+    if (this.isCancelled(job)) return;
+
+    const outVideo = path.join(result.outputDir, result.files[0].name);
+    await this.runVerification(
+      job,
+      inputs.map((i) => i.resolved.absPath),
+      [outVideo],
+      this.packetEstimate(inputs.map((i) => i.probe)),
+      result
+    );
+    if (this.isCancelled(job)) return;
+    job.totalParts = inputs.length;
+    this.finishJob(job, result);
   }
 }
 

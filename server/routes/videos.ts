@@ -15,7 +15,9 @@ import {
   startVideoAnalysis,
 } from '../media/probe.js';
 import { sanitizeFileName } from '../media/split.js';
+import { CHAPTER_CONTAINERS } from '../media/chapters.js';
 import { getCachedScenes, SENSITIVITY_THRESHOLDS } from '../media/scenes.js';
+import { getTargetExtension } from '../media/split.js';
 import { encodeVideoId, listVideos, resolveVideo } from '../sources.js';
 import type { SceneParams, SplitMode } from '../types.js';
 
@@ -417,6 +419,99 @@ videosRouter.post('/:id/scenes', (req, res, next) => {
     }
     const job = jobQueue.addSceneJob(req.params.id, resolved.displayName, params);
     res.json({ ok: true, cached: false, jobId: job.id, job });
+  } catch (err: any) {
+    next(err);
+  }
+});
+
+const STREAM_MIME: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska',
+  '.webm': 'video/webm',
+  '.avi': 'video/x-msvideo',
+  '.ts': 'video/mp2t',
+  '.mts': 'video/mp2t',
+  '.m2ts': 'video/mp2t',
+};
+
+// GET /api/videos/:id/stream - Vorschau im Browser mit HTTP-Range (206), damit man springen kann
+videosRouter.get('/:id/stream', (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
+      return res.status(404).json({ error: 'Video nicht gefunden.' });
+    }
+    const stat = fs.statSync(resolved.absPath);
+    const total = stat.size;
+    const mime = STREAM_MIME[path.extname(resolved.absPath).toLowerCase()] || 'application/octet-stream';
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+
+    const range = req.headers.range;
+    if (!range) {
+      res.setHeader('Content-Length', String(total));
+      return fs.createReadStream(resolved.absPath).pipe(res);
+    }
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!m) {
+      res.setHeader('Content-Range', `bytes */${total}`);
+      return res.status(416).end();
+    }
+    let start = m[1] ? parseInt(m[1], 10) : 0;
+    let end = m[2] ? parseInt(m[2], 10) : total - 1;
+    if (!m[1] && m[2]) {
+      // Suffix-Range: die letzten N Bytes
+      start = Math.max(0, total - parseInt(m[2], 10));
+      end = total - 1;
+    }
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= total) {
+      res.setHeader('Content-Range', `bytes */${total}`);
+      return res.status(416).end();
+    }
+    end = Math.min(end, total - 1);
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+    res.setHeader('Content-Length', String(end - start + 1));
+    fs.createReadStream(resolved.absPath, { start, end }).pipe(res);
+  } catch (err: any) {
+    next(err);
+  }
+});
+
+// POST /api/videos/:id/chapters { times, titles? } - Kopie mit Kapiteln (ohne Schnitt)
+videosRouter.post('/:id/chapters', (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) {
+      return res.status(404).json({ error: 'Video nicht gefunden.' });
+    }
+    const ext = getTargetExtension(path.extname(resolved.absPath));
+    if (!CHAPTER_CONTAINERS.has(ext)) {
+      return res.status(400).json({ error: 'Kapitel sind nur bei MP4, MOV und MKV möglich.' });
+    }
+    const rawTimes = req.body?.times;
+    if (!Array.isArray(rawTimes) || rawTimes.length === 0 || rawTimes.length > 2000) {
+      return res.status(400).json({ error: 'Kapitelgrenzen fehlen oder sind ungültig.' });
+    }
+    const times = rawTimes.map(Number);
+    if (times.some((t) => !Number.isFinite(t) || t < 0)) {
+      return res.status(400).json({ error: 'Kapitelgrenzen müssen Sekunden ≥ 0 sein.' });
+    }
+    let titles: string[] | undefined;
+    if (req.body?.titles !== undefined) {
+      if (!Array.isArray(req.body.titles) || req.body.titles.some((t: unknown) => typeof t !== 'string')) {
+        return res.status(400).json({ error: 'Kapiteltitel müssen Texte sein.' });
+      }
+      titles = (req.body.titles as string[]).map((t) => t.slice(0, 120));
+    }
+    if (jobQueue.isVideoBusy(req.params.id)) {
+      return res.status(409).json({ error: 'Für dieses Video läuft gerade ein anderer Auftrag.' });
+    }
+    const job = jobQueue.addChapterJob(req.params.id, resolved.displayName, times, titles);
+    res.json({ ok: true, jobId: job.id, job });
   } catch (err: any) {
     next(err);
   }

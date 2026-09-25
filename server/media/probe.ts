@@ -5,7 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { CACHE_DIR, THUMBS_DIR } from '../config.js';
-import type { ProbeResult, ResolvedVideo, VideoStreamInfo } from '../types.js';
+import type { AudioStreamInfo, ProbeResult, ResolvedVideo, VideoStreamInfo } from '../types.js';
+
+/** Cache-Format der Analyse; ältere Einträge werden neu analysiert (v2: Tonspur-Details für Merge) */
+export const PROBE_VERSION = 2;
 
 export function getVideoCacheKey(source: string, relPath: string, size: number, mtimeMs: number): string {
   const data = `${source}_${relPath}_${size}_${mtimeMs}`;
@@ -55,7 +58,8 @@ export function getCachedProbe(resolved: ResolvedVideo): ProbeResult | null {
     const cacheFilePath = path.join(CACHE_DIR, `${cacheKey}.json`);
     if (fs.existsSync(cacheFilePath)) {
       const content = fs.readFileSync(cacheFilePath, 'utf-8');
-      return JSON.parse(content) as ProbeResult;
+      const parsed = JSON.parse(content) as ProbeResult;
+      if (parsed.probeVersion === PROBE_VERSION) return parsed;
     }
   } catch {
     // ignore
@@ -110,6 +114,7 @@ export function startVideoAnalysis(resolved: ResolvedVideo, videoId: string): Pr
       const container = getShortContainerName(metadata.format?.format_name || '', resolved.displayName);
 
       let videoStream: VideoStreamInfo | null = null;
+      const audioStreams: AudioStreamInfo[] = [];
       let audioTrackCount = 0;
       let subtitleTrackCount = 0;
       let hasDataStreams = false;
@@ -130,8 +135,17 @@ export function startVideoAnalysis(resolved: ResolvedVideo, videoId: string): Pr
             fps,
             duration: stream.duration ? parseFloat(stream.duration) : duration,
             bitrate: stream.bit_rate ? parseInt(stream.bit_rate, 10) : undefined,
+            pixFmt: stream.pix_fmt || undefined,
+            profile: stream.profile || undefined,
           };
         } else if (stream.codec_type === 'audio') {
+          audioStreams.push({
+            index: audioTrackCount,
+            codec: stream.codec_name || 'unknown',
+            sampleRate: stream.sample_rate ? parseInt(stream.sample_rate, 10) : 0,
+            channels: stream.channels || 0,
+            language: stream.tags?.language || undefined,
+          });
           audioTrackCount++;
         } else if (stream.codec_type === 'subtitle') {
           subtitleTrackCount++;
@@ -197,6 +211,7 @@ export function startVideoAnalysis(resolved: ResolvedVideo, videoId: string): Pr
         duration,
         startTime,
         video: videoStream,
+        audio: audioStreams,
         audioTrackCount,
         subtitleTrackCount,
         hasDataStreams,
@@ -204,6 +219,7 @@ export function startVideoAnalysis(resolved: ResolvedVideo, videoId: string): Pr
         keyframeIntervalAvg,
         keyframeIntervalMax,
         analyzedAt: new Date().toISOString(),
+        probeVersion: PROBE_VERSION,
       };
 
       try {
@@ -254,6 +270,11 @@ interface FfprobeRawOutput {
     r_frame_rate?: string;
     duration?: string;
     bit_rate?: string;
+    pix_fmt?: string;
+    profile?: string;
+    sample_rate?: string;
+    channels?: number;
+    tags?: { language?: string };
   }>;
 }
 

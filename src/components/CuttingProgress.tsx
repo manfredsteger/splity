@@ -28,7 +28,13 @@ export const CuttingProgress: React.FC<CuttingProgressProps> = ({
 
       <div>
         <h3 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
-          {isVerifying ? 'Prüfe Teile gegen das Original …' : 'Video wird verlustfrei getrennt'}
+          {isVerifying
+            ? 'Prüfe Ausgabe gegen das Original …'
+            : job.type === 'chapters'
+            ? 'Kapitel werden geschrieben'
+            : job.type === 'merge'
+            ? 'Videos werden verlustfrei zusammengefügt'
+            : 'Video wird verlustfrei getrennt'}
         </h3>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1 truncate max-w-lg mx-auto">
           {job.videoName}
@@ -41,6 +47,8 @@ export const CuttingProgress: React.FC<CuttingProgressProps> = ({
           <span>
             {isVerifying
               ? 'Bitgenaue Paket-Prüfung'
+              : job.type === 'chapters' || job.type === 'merge'
+              ? 'Kopiere Pakete …'
               : job.currentPart > 0 && job.totalParts > 0
               ? `Teil ${job.currentPart} von ${job.totalParts}`
               : 'Wird gestartet...'}
