@@ -155,6 +155,7 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 14. **Video-IDs nur über eine zentrale Auflösung** (`sources.ts`, Prüfung gegen den Quellordner und `fs.realpath`). Nie Pfade aus der URL direkt öffnen.
 
 ### Erkenntnisse aus dem Review (2026-09-25)
+- **`~/Movies` nie als Ganzes einbinden.** Docker Desktop auf dem Mac hängt beim Mounten dieses Ordners (auch ein nacktes Alpine-Image), vermutlich wegen der Apple-TV-Mediathek darin; der Container ließ sich danach nicht mehr stoppen, Docker Desktop musste neu gestartet werden. Unterordner (z. B. `~/Movies/Splity`) funktionieren.
 - Der Segment-Muxer bekommt Muxer-Optionen nur über `-segment_format_options` (z. B. `movflags=+faststart:strict=experimental`); ein globales `-strict` wirkt dort nicht. `strict=experimental` ist nötig für FLAC-Ton in MP4.
 - Bit-Prüfung (`-f framemd5` mit `-c copy`): Pakete **je Stream** vergleichen, nicht in der verschachtelten Ausgabereihenfolge – Video und Audio werden in den Teilen anders verzahnt als im Original, die Folge je Stream ist aber identisch.
 - Der Datenspur-Fallback (`-dn`) läuft nur, wenn die Analyse Datenstreams gemeldet hat; sonst würde die Warnung „Datenspuren weggelassen“ auch bei ganz anderen Fehlern erscheinen.
