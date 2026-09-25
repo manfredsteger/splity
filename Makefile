@@ -41,6 +41,10 @@ setup:
 		echo "$(BLUE)Erstelle Ordner auf dem Mac: $$SPLITY_DIR_PATH/Eingang und $$SPLITY_DIR_PATH/Fertig...$(NC)"; \
 		mkdir -p "$$SPLITY_DIR_PATH/Eingang" "$$SPLITY_DIR_PATH/Fertig"; \
 	fi
+	@if ! grep -q '^SPLITY_LIBRARY_PATH=' .env; then \
+		echo "$(YELLOW)SPLITY_LIBRARY_PATH fehlt in .env (ältere Installation) – ergänze /Users/$$USER/Movies...$(NC)"; \
+		printf '\nSPLITY_LIBRARY_PATH=/Users/%s/Movies\n' "$$USER" >> .env; \
+	fi
 	@LIB_PATH=$$(grep '^SPLITY_LIBRARY_PATH=' .env | cut -d '=' -f2-); \
 	if [ -z "$$LIB_PATH" ] || [ ! -d "$$LIB_PATH" ]; then \
 		echo "$(RED)Fehler: Bibliotheksordner '$$LIB_PATH' existiert nicht. Bitte SPLITY_LIBRARY_PATH in .env anpassen!$(NC)"; \
