@@ -16,6 +16,7 @@ import {
 } from '../media/probe.js';
 import { sanitizeFileName } from '../media/split.js';
 import { CHAPTER_CONTAINERS } from '../media/chapters.js';
+import { checkRemux, REMUX_TARGETS, type RemuxTarget } from '../media/tools.js';
 import { getCachedScenes, SENSITIVITY_THRESHOLDS } from '../media/scenes.js';
 import { getTargetExtension } from '../media/split.js';
 import { encodeVideoId, listVideos, resolveVideo } from '../sources.js';
@@ -523,6 +524,57 @@ videosRouter.post('/:id/chapters', (req, res, next) => {
       return res.status(409).json({ error: 'Für dieses Video läuft gerade ein anderer Auftrag.' });
     }
     const job = jobQueue.addChapterJob(req.params.id, resolved.displayName, times, titles);
+    res.json({ ok: true, jobId: job.id, job });
+  } catch (err: any) {
+    next(err);
+  }
+});
+
+// GET /api/videos/:id/remux-check?target=mp4 - Vorprüfung fürs Umverpacken
+videosRouter.get('/:id/remux-check', async (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+    const target = String(req.query.target || '') as RemuxTarget;
+    if (!REMUX_TARGETS.includes(target)) return res.status(400).json({ error: 'Unbekanntes Zielformat.' });
+    const probe = await probeVideo(resolved, req.params.id);
+    res.json(checkRemux(probe, path.extname(resolved.absPath), target));
+  } catch (err: any) {
+    next(err);
+  }
+});
+
+// POST /api/videos/:id/remux { target } - Container wechseln ohne Neucodierung
+videosRouter.post('/:id/remux', async (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+    const target = String(req.body?.target || '') as RemuxTarget;
+    if (!REMUX_TARGETS.includes(target)) return res.status(400).json({ error: 'Unbekanntes Zielformat (mp4, mov, mkv).' });
+    const probe = await probeVideo(resolved, req.params.id);
+    const check = checkRemux(probe, path.extname(resolved.absPath), target);
+    if (!check.ok) return res.status(400).json({ error: check.problems.join(' ') });
+    if (jobQueue.isVideoBusy(req.params.id)) return res.status(409).json({ error: 'Für dieses Video läuft gerade ein anderer Auftrag.' });
+    const job = jobQueue.addRemuxJob(req.params.id, resolved.displayName, target);
+    res.json({ ok: true, jobId: job.id, job });
+  } catch (err: any) {
+    next(err);
+  }
+});
+
+// POST /api/videos/:id/audio { track } - Tonspur herausziehen
+videosRouter.post('/:id/audio', async (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+    const probe = await probeVideo(resolved, req.params.id);
+    const track = req.body?.track === undefined ? 0 : Number(req.body.track);
+    const count = (probe.audio || []).length;
+    if (!Number.isInteger(track) || track < 0 || track >= count) {
+      return res.status(400).json({ error: count === 0 ? 'Das Video hat keine Tonspur.' : `Tonspur muss zwischen 1 und ${count} liegen.` });
+    }
+    if (jobQueue.isVideoBusy(req.params.id)) return res.status(409).json({ error: 'Für dieses Video läuft gerade ein anderer Auftrag.' });
+    const job = jobQueue.addAudioJob(req.params.id, resolved.displayName, track);
     res.json({ ok: true, jobId: job.id, job });
   } catch (err: any) {
     next(err);

@@ -114,8 +114,9 @@ export interface SplitResultFile {
   duration: number;
 }
 
-export type JobPhase = 'split' | 'verify' | 'scenes' | 'chapters' | 'merge';
-export type JobType = 'split' | 'scenes' | 'chapters' | 'merge';
+export type JobPhase = 'split' | 'verify' | 'scenes' | 'chapters' | 'merge' | 'remux' | 'audio';
+export type JobType = 'split' | 'scenes' | 'chapters' | 'merge' | 'remux' | 'audio';
+export type ResultKind = 'split' | 'chapters' | 'merge' | 'remux' | 'audio';
 
 export interface StreamVerification {
   kind: 'video' | 'audio';
@@ -128,6 +129,7 @@ export interface StreamVerification {
 export interface VerificationResult {
   ok: boolean;
   skipped?: boolean;
+  note?: string;
   streams: StreamVerification[];
   durationMs: number;
   errorMessage?: string;
@@ -156,6 +158,8 @@ export interface Job {
   inputIds?: string[];
   inputNames?: string[];
   outputName?: string;
+  remuxTarget?: string;
+  audioTrack?: number;
   status: JobStatus;
   phase?: JobPhase;
   progress: number;

@@ -157,6 +157,12 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 - **Max. Größe je Teil** (`mode: size`): Die Analyse liest ab `probeVersion 3` **alle** Pakete (`packet=stream_index,pts_time,dts_time,size,flags`, Reihenfolge = ffprobe-intern) und summiert die Bytes aller Streams je Keyframe-Abschnitt (`gopBytes`, gleiche Länge wie `keyframes`). `planBySize` addiert Abschnitte greedy und schneidet am ersten Keyframe, dessen Abschnitt das Limit sprengen würde (Reserve 1,5 % für den Container). Ein einzelner Abschnitt über dem Limit lässt sich verlustfrei nicht kleiner machen → Warnung. Jeder Teil bekommt `bytes` (Schätzung) für die Anzeige.
 - **Ausschnitt** (`mode: trim`): Anfang/Ende landen auf Keyframes, der Segment-Muxer schneidet wie immer, danach werden die Teile außerhalb des Bereichs verworfen (`part.keep === false`), der Rest heißt `<name> (Ausschnitt hh-mm-ss bis hh-mm-ss).<ext>`. Die Bit-Prüfung läuft im Modus `subsequence`: Die Ausgabe muss je Stream eine **zusammenhängende Teilfolge** der Originalpakete sein.
 
+## Werkzeuge: Container wechseln, Tonspur, LosslessCut-CSV (Später-Liste)
+
+- **Container wechseln** (`tools.ts`, Job-Typ `remux`): `-map 0 -map_metadata 0 -c copy` in MP4/MOV/MKV. Vorprüfung `checkRemux` gegen Codec-Listen je Container (ProRes nur MOV, MKV nimmt alles); Untertitel, die nicht in MP4/MOV passen (SRT/ASS/PGS), werden mit Warnung weggelassen. **TS-Quellen**: H.264/HEVC liegen dort als Annex B, MP4/MOV/MKV brauchen AVCC – ffmpeg wandelt nur die Paket-Hülle (Bitstream-Filter, kein Neucodieren), die Pakete sind danach aber nicht bitweise gleich → Bit-Prüfung wird mit Hinweis übersprungen.
+- **Tonspur herausziehen** (Job-Typ `audio`): `-vn -sn -dn -map 0:a:<i> -c copy`, Endung nach Codec (`audioExtensionFor`: AAC/ALAC → .m4a, FLAC, MP3, Opus, PCM → .wav, sonst .mka). Bit-Prüfung mit `inputMap ['-map','0:a:<i>']` / `outputMap ['-map','0:a:0']`; bei AAC aus TS entfällt sie (ADTS-Kopf wird entfernt).
+- **LosslessCut-CSV**: rein im Browser aus dem aktuellen Plan (`start,end,name` je Zeile, Dateiname `<video>-llc.csv`), lässt sich in LosslessCut importieren.
+
 ## 5. Nicht verändern (Goldene Regeln)
 
 1. **Dockerfile**: `COPY package.json ./`, **nicht** `package*.json`! Die Datei `.dockerignore` muss zwingend erhalten bleiben.

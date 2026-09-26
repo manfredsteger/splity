@@ -18,6 +18,7 @@ import { UploadProgress } from './components/UploadProgress.js';
 import { VideoDetail } from './components/VideoDetail.js';
 import type {
   AppSettings,
+  ResultKind,
   HealthInfo,
   Job,
   ProbeResult,
@@ -57,7 +58,7 @@ export default function App() {
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [isStartingSplit, setIsStartingSplit] = useState(false);
   const [isCancellingJob, setIsCancellingJob] = useState(false);
-  const [resultData, setResultData] = useState<{ videoName: string; result: SplitResult; kind?: 'split' | 'chapters' | 'merge' } | null>(null);
+  const [resultData, setResultData] = useState<{ videoName: string; result: SplitResult; kind?: ResultKind } | null>(null);
 
   // Upload state
   const [isUploading, setIsUploading] = useState(false);
@@ -465,6 +466,35 @@ export default function App() {
     [selectedVideo, probeResult, fetchJobs, addToast]
   );
 
+  // Werkzeuge (Container wechseln, Tonspur) – gleiche Job-Anzeige wie der Schnitt
+  const startToolJob = useCallback(
+    async (endpoint: string, body: Record<string, unknown>, failMessage: string) => {
+      if (!selectedVideo || !probeResult) return;
+      setIsStartingSplit(true);
+      try {
+        const res = await fetch(`/api/videos/${encodeURIComponent(selectedVideo.id)}/${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || failMessage);
+        }
+        const data = await res.json();
+        setActiveJob(data.job);
+        fetchJobs();
+      } catch (err: any) {
+        addToast('error', err.message || failMessage, 'Fehler');
+      } finally {
+        setIsStartingSplit(false);
+      }
+    },
+    [selectedVideo, probeResult, fetchJobs, addToast]
+  );
+  const handleStartRemux = useCallback((target: string) => startToolJob('remux', { target }, 'Umverpacken konnte nicht gestartet werden.'), [startToolJob]);
+  const handleStartAudio = useCallback((track: number) => startToolJob('audio', { track }, 'Tonspur konnte nicht herausgezogen werden.'), [startToolJob]);
+
   // Subscribe to SSE events for active cutting job
   useEffect(() => {
     if (!activeJob) return;
@@ -477,7 +507,10 @@ export default function App() {
         setActiveJob(updatedJob);
 
         if (updatedJob.status === 'done') {
-          const kind = updatedJob.type === 'chapters' ? 'chapters' : updatedJob.type === 'merge' ? 'merge' : 'split';
+          const kind: ResultKind =
+            updatedJob.type === 'chapters' || updatedJob.type === 'merge' || updatedJob.type === 'remux' || updatedJob.type === 'audio'
+              ? updatedJob.type
+              : 'split';
           if (updatedJob.result) {
             setResultData({
               videoName: updatedJob.videoName,
@@ -487,6 +520,10 @@ export default function App() {
           }
           if (kind === 'chapters') {
             addToast('success', 'Kopie mit Kapiteln gespeichert.', 'Kapitel fertig');
+          } else if (kind === 'remux') {
+            addToast('success', 'Container gewechselt, Bild und Ton unverändert.', 'Neu verpackt');
+          } else if (kind === 'audio') {
+            addToast('success', 'Tonspur unverändert herausgezogen.', 'Tonspur fertig');
           } else {
             addToast('success', `${updatedJob.result?.files.length || 0} Teile erstellt!`, 'Schnitt fertig');
           }
@@ -693,6 +730,8 @@ export default function App() {
                   }}
                   onStartSplit={handleStartSplit}
                   onStartChapters={handleStartChapters}
+                  onStartRemux={handleStartRemux}
+                  onStartAudio={handleStartAudio}
                   isStartingSplit={isStartingSplit}
                 />
               )}

@@ -7,19 +7,22 @@ import { executeMerge, type MergeInput } from './media/merge.js';
 import { planSplit } from './media/plan.js';
 import { probeVideo } from './media/probe.js';
 import { detectScenes } from './media/scenes.js';
+import { checkRemux, extractAudio, remux, type RemuxTarget } from './media/tools.js';
 import { executeSplit } from './media/split.js';
 import { verifySequence } from './media/verify.js';
 import { decodeVideoId, resolveVideo } from './sources.js';
 import type { Job, JobPhase, JobType, ProbeResult, SceneParams, SplitMode, SplitResult } from './types.js';
 
 type NewJobFields = Pick<Job, 'type' | 'videoId' | 'videoName' | 'mode'> &
-  Partial<Pick<Job, 'sceneParams' | 'chapterTimes' | 'chapterTitles' | 'inputIds' | 'inputNames' | 'outputName'>>;
+  Partial<Pick<Job, 'sceneParams' | 'chapterTimes' | 'chapterTitles' | 'inputIds' | 'inputNames' | 'outputName' | 'remuxTarget' | 'audioTrack'>>;
 
 const START_PHASE: Record<JobType, JobPhase> = {
   split: 'split',
   scenes: 'scenes',
   chapters: 'chapters',
   merge: 'merge',
+  remux: 'remux',
+  audio: 'audio',
 };
 
 /**
@@ -154,6 +157,28 @@ class JobQueue extends EventEmitter {
     });
   }
 
+  /** Container wechseln ohne Neucodierung. */
+  public addRemuxJob(videoId: string, videoName: string, target: RemuxTarget): Job {
+    return this.newJob({
+      type: 'remux',
+      videoId,
+      videoName,
+      mode: { type: 'points', times: [], origin: 'manual' },
+      remuxTarget: target,
+    });
+  }
+
+  /** Eine Tonspur herausziehen. */
+  public addAudioJob(videoId: string, videoName: string, track: number): Job {
+    return this.newJob({
+      type: 'audio',
+      videoId,
+      videoName,
+      mode: { type: 'points', times: [], origin: 'manual' },
+      audioTrack: track,
+    });
+  }
+
   public cancelJob(id: string): boolean {
     const job = this.getJob(id);
     if (!job) return false;
@@ -184,7 +209,8 @@ class JobQueue extends EventEmitter {
     outputs: string[],
     packetEstimate: number,
     result: SplitResult,
-    mode: 'exact' | 'subsequence' = 'exact'
+    mode: 'exact' | 'subsequence' = 'exact',
+    maps?: { inputMap?: string[]; outputMap?: string[] }
   ): Promise<void> {
     if (!loadSettings().verifyAfterSplit) {
       result.verification = { ok: true, skipped: true, streams: [], durationMs: 0 };
@@ -206,6 +232,8 @@ class JobQueue extends EventEmitter {
       },
       isCancelled: () => this.isCancelled(job),
       mode,
+      inputMap: maps?.inputMap,
+      outputMap: maps?.outputMap,
     });
     result.verification = verification;
     if (!verification.ok && verification.errorMessage) {
@@ -286,6 +314,64 @@ class JobQueue extends EventEmitter {
         if (this.isCancelled(nextJob)) return;
         const outVideo = path.join(result.outputDir, result.files[0].name);
         await this.runVerification(nextJob, [resolved.absPath], [outVideo], this.packetEstimate([probe]), result);
+        if (this.isCancelled(nextJob)) return;
+        this.finishJob(nextJob, result);
+        return;
+      }
+
+      if (nextJob.type === 'remux' && nextJob.remuxTarget) {
+        const target = nextJob.remuxTarget as RemuxTarget;
+        const check = checkRemux(probe, path.extname(resolved.absPath), target);
+        const handle = remux(resolved, probe, target, onProgress);
+        this.activeHandle = handle;
+        const result = await handle.promise;
+        this.activeHandle = null;
+        if (this.isCancelled(nextJob)) return;
+        const outVideo = path.join(result.outputDir, result.files[0].name);
+        if (check.annexB) {
+          // MPEG-TS speichert H.264/HEVC als Annex B; MP4/MOV/MKV brauchen AVCC/HVCC. ffmpeg wandelt
+          // die Paket-Hülle um (Bitstream-Filter), der Inhalt bleibt gleich – bitweise vergleichbar
+          // sind die Pakete danach aber nicht mehr.
+          result.verification = {
+            ok: true,
+            skipped: true,
+            streams: [],
+            durationMs: 0,
+            note: 'TS-Quelle: Pakete werden von Annex B nach AVCC umgehüllt (kein Neucodieren), bitweiser Vergleich deshalb nicht möglich.',
+          };
+        } else {
+          await this.runVerification(nextJob, [resolved.absPath], [outVideo], this.packetEstimate([probe]), result);
+        }
+        if (this.isCancelled(nextJob)) return;
+        this.finishJob(nextJob, result);
+        return;
+      }
+
+      if (nextJob.type === 'audio' && typeof nextJob.audioTrack === 'number') {
+        const track = nextJob.audioTrack;
+        const handle = extractAudio(resolved, probe, track, onProgress);
+        this.activeHandle = handle;
+        const result = await handle.promise;
+        this.activeHandle = null;
+        if (this.isCancelled(nextJob)) return;
+        const outAudio = path.join(result.outputDir, result.files[0].name);
+        const codec = probe.audio?.[track]?.codec || '';
+        const srcExt = path.extname(resolved.absPath).toLowerCase();
+        const adts = ['.ts', '.mts', '.m2ts'].includes(srcExt) && codec === 'aac';
+        if (adts) {
+          result.verification = {
+            ok: true,
+            skipped: true,
+            streams: [],
+            durationMs: 0,
+            note: 'TS-Quelle: AAC-Pakete verlieren beim Verpacken in M4A ihren ADTS-Kopf (kein Neucodieren), bitweiser Vergleich deshalb nicht möglich.',
+          };
+        } else {
+          await this.runVerification(nextJob, [resolved.absPath], [outAudio], this.packetEstimate([probe]), result, 'exact', {
+            inputMap: ['-map', `0:a:${track}`],
+            outputMap: ['-map', '0:a:0'],
+          });
+        }
         if (this.isCancelled(nextJob)) return;
         this.finishJob(nextJob, result);
         return;

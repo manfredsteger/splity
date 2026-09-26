@@ -78,3 +78,4 @@ Modus „An Szenen“: Splity erkennt Szenenwechsel (optional auch Schwarzbilder
 
 - **Max. Größe**: Teile mit maximaler Dateigröße (z. B. 2 GB für Upload-Grenzen), Schnitte an Keyframes.
 - **Ausschnitt**: nur einen Bereich behalten (Anfang/Ende, auch aus der Player-Position), Rest wird verworfen.
+- **Werkzeuge**: Container wechseln (z. B. MKV → MP4), Tonspur herausziehen, Schnittplan als LosslessCut-CSV.

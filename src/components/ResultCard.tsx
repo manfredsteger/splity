@@ -10,12 +10,12 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { formatBytes, formatTime } from '../utils/format.js';
-import type { SplitResult } from '../types.js';
+import type { ResultKind, SplitResult } from '../types.js';
 
 interface ResultCardProps {
   videoName: string;
   result: SplitResult;
-  kind?: 'split' | 'chapters' | 'merge';
+  kind?: ResultKind;
   onNextVideo: () => void;
   onCutAgain: () => void;
 }
@@ -91,6 +91,10 @@ export const ResultCard: React.FC<ResultCardProps> = ({
                     ? `Kapitel gespeichert (${durationSec} s)`
                     : kind === 'merge'
                     ? `Zusammengefügt in ${durationSec} s`
+                    : kind === 'remux'
+                    ? `Neu verpackt in ${durationSec} s`
+                    : kind === 'audio'
+                    ? `Tonspur herausgezogen (${durationSec} s)`
                     : `${fileCount} ${fileCount === 1 ? 'Datei' : 'Dateien'} in ${durationSec} s erstellt`}
                 </h2>
                 <p className="text-sm text-emerald-800 dark:text-emerald-300 mt-0.5">
@@ -98,6 +102,10 @@ export const ResultCard: React.FC<ResultCardProps> = ({
                     ? 'Kopie mit Kapiteln – bildgenau, ohne Schnitt, verlustfrei.'
                     : kind === 'merge'
                     ? 'Per concat-Demuxer ohne Neukodierung aneinandergehängt.'
+                    : kind === 'remux'
+                    ? 'Nur der Container wurde gewechselt – Bild und Ton unverändert.'
+                    : kind === 'audio'
+                    ? 'Tonspur unverändert kopiert, nur neu verpackt.'
                     : 'Direkt per Segment-Muxer auf deiner Festplatte gespeichert.'}
                 </p>
 
@@ -114,7 +122,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({
 
                 {verification && verification.skipped && (
                   <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-medium">
-                    <span>Prüfung übersprungen</span>
+                    <span>Prüfung übersprungen{verification?.note ? ` – ${verification.note}` : ''}</span>
                   </div>
                 )}
               </div>
@@ -209,7 +217,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({
           className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 font-semibold text-sm transition-colors cursor-pointer shadow-xs"
         >
           <RotateCcw className="w-4 h-4" />
-          <span>{kind === 'merge' ? 'Zurück zur Liste' : kind === 'chapters' ? 'Zurück zum Video' : 'Gleiches Video anders schneiden'}</span>
+          <span>{kind === 'merge' ? 'Zurück zur Liste' : kind === 'split' ? 'Gleiches Video anders schneiden' : 'Zurück zum Video'}</span>
         </button>
 
         <button

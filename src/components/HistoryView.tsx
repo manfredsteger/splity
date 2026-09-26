@@ -77,6 +77,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               ? `Kapitel (${(job.chapterTimes?.length || 0) + 1})`
               : job.type === 'merge'
               ? `Zusammengefügt aus ${job.inputIds?.length || 0} Videos`
+              : job.type === 'remux'
+              ? `Neu verpackt als ${(job.remuxTarget || '').toUpperCase()}`
+              : job.type === 'audio'
+              ? `Tonspur ${(job.audioTrack ?? 0) + 1} herausgezogen`
               : job.mode.type === 'count'
               ? `${job.mode.n} Teile`
               : job.mode.type === 'every'

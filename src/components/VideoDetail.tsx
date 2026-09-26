@@ -8,7 +8,10 @@ import {
   FolderOpen,
   HardDrive,
   BookmarkPlus,
+  Download,
   Eye,
+  FileAudio,
+  Package,
   EyeOff,
   Loader2,
   Minus,
@@ -51,6 +54,9 @@ interface VideoDetailProps {
   onStartSplit: (mode: SplitMode) => void;
   /** Kopie mit Kapiteln an den gewählten Szenengrenzen (ohne Schnitt) */
   onStartChapters?: (times: number[]) => void;
+  /** Container wechseln (mp4 | mov | mkv) bzw. Tonspur herausziehen (0-basiert) */
+  onStartRemux?: (target: string) => void;
+  onStartAudio?: (track: number) => void;
   isStartingSplit: boolean;
   defaultParts: number;
   source?: string;
@@ -65,6 +71,8 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   onBack,
   onStartSplit,
   onStartChapters,
+  onStartRemux,
+  onStartAudio,
   isStartingSplit,
   defaultParts,
   source,
@@ -99,6 +107,50 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   const [showPlayer, setShowPlayer] = useState(true);
   const seek = useCallback((seconds: number) => playerRef.current?.seek(seconds, true), []);
   const chaptersPossible = ['MP4', 'MOV', 'MKV', 'M4V'].includes((probe.container || '').toUpperCase());
+
+  // Werkzeuge: Container wechseln, Tonspur herausziehen, LosslessCut-CSV
+  const currentContainer = (probe.container || '').toUpperCase();
+  const remuxTargets = (['mp4', 'mov', 'mkv'] as const).filter((t) => t.toUpperCase() !== currentContainer && !(currentContainer === 'M4V' && t === 'mp4'));
+  const [remuxTarget, setRemuxTarget] = useState<string>(remuxTargets[0] || 'mp4');
+  const [remuxInfo, setRemuxInfo] = useState<{ ok: boolean; problems: string[]; dropSubtitles: boolean; annexB: boolean } | null>(null);
+  const [audioTrack, setAudioTrack] = useState<number>(0);
+  useEffect(() => {
+    setRemuxTarget(remuxTargets[0] || 'mp4');
+    setAudioTrack(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoId]);
+  useEffect(() => {
+    let cancelled = false;
+    setRemuxInfo(null);
+    if (!remuxTargets.includes(remuxTarget as 'mp4' | 'mov' | 'mkv')) return;
+    fetch(`/api/videos/${encodeURIComponent(videoId)}/remux-check?target=${remuxTarget}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d) setRemuxInfo(d);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoId, remuxTarget]);
+
+  const downloadLosslessCutCsv = useCallback(() => {
+    if (!plan) return;
+    const base = probe.filename.replace(/\.[^.]+$/, '');
+    const rows = plan.parts
+      .filter((p) => p.keep !== false)
+      .map((p, i) => `${p.start.toFixed(3)},${p.end.toFixed(3)},${JSON.stringify(`${base} - Teil ${i + 1}`)}`);
+    const blob = new Blob([rows.join('\n') + '\n'], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${base}-llc.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [plan, probe.filename]);
 
   // Sortierte aktive Grenzen als stabiler Schlüssel für Effekte
   const boundaryTimes = useMemo(() => Array.from(activeBoundaries).sort((a, b) => a - b), [activeBoundaries]);
@@ -428,6 +480,92 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
           <VideoPlayer ref={playerRef} videoId={videoId} container={probe.container} codec={probe.video?.codec} onTimeUpdate={setPlayerTime} />
         )}
       </div>
+
+      {/* Werkzeuge: Container wechseln, Tonspur */}
+      {(onStartRemux || onStartAudio) && (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-xs">
+          <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 mb-3">Werkzeuge (ohne Schnitt, ohne Neucodierung)</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {onStartRemux && (
+              <div className="flex flex-col gap-2 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800">
+                <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  <Package className="w-4 h-4 text-blue-600" />
+                  Container wechseln
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">{currentContainer} →</span>
+                  <select
+                    value={remuxTarget}
+                    onChange={(e) => setRemuxTarget(e.target.value)}
+                    className="px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-bold text-zinc-900 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-blue-500/30"
+                  >
+                    {remuxTargets.map((t) => (
+                      <option key={t} value={t}>
+                        {t.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => onStartRemux(remuxTarget)}
+                    disabled={isStartingSplit || remuxTargets.length === 0 || (remuxInfo ? !remuxInfo.ok : false)}
+                    className="ml-auto px-3 py-1.5 rounded-lg text-xs font-bold bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:opacity-90 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    Neu verpacken
+                  </button>
+                </div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  {remuxInfo && !remuxInfo.ok
+                    ? remuxInfo.problems.join(' ')
+                    : remuxInfo?.dropSubtitles
+                    ? `Untertitel passen nicht in ${remuxTarget.toUpperCase()} und werden weggelassen.`
+                    : remuxInfo?.annexB
+                    ? 'TS-Quelle: Paket-Hülle wird umgewandelt (kein Neucodieren), die Bit-Prüfung entfällt.'
+                    : 'Z. B. MKV → MP4, damit es überall abspielt. Bild und Ton bleiben unverändert.'}
+                </div>
+              </div>
+            )}
+            {onStartAudio && (
+              <div className="flex flex-col gap-2 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800">
+                <div className="flex items-center gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+                  <FileAudio className="w-4 h-4 text-blue-600" />
+                  Tonspur herausziehen
+                </div>
+                <div className="flex items-center gap-2">
+                  {(probe.audio || []).length > 1 ? (
+                    <select
+                      value={audioTrack}
+                      onChange={(e) => setAudioTrack(Number(e.target.value))}
+                      className="px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-xs font-bold text-zinc-900 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-blue-500/30"
+                    >
+                      {(probe.audio || []).map((a) => (
+                        <option key={a.index} value={a.index}>
+                          Spur {a.index + 1}: {a.codec.toUpperCase()} {a.channels}ch{a.language ? ` (${a.language})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                      {(probe.audio || []).length === 1
+                        ? `${probe.audio![0].codec.toUpperCase()} ${probe.audio![0].channels}ch`
+                        : 'Keine Tonspur'}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onStartAudio(audioTrack)}
+                    disabled={isStartingSplit || (probe.audio || []).length === 0}
+                    className="ml-auto px-3 py-1.5 rounded-lg text-xs font-bold bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:opacity-90 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    Herausziehen
+                  </button>
+                </div>
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400">Unverändert kopiert, Endung nach Codec (AAC → .m4a, FLAC → .flac, MP3 → .mp3 …).</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Split Control & Mode Switcher */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-xs space-y-6">
@@ -872,6 +1010,19 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                   </div>
                 );
               })}
+            </div>
+
+            {/* LosslessCut-CSV */}
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={downloadLosslessCutCsv}
+                title="Schnittplan als CSV (start,end,name) für die Feinarbeit in LosslessCut"
+                className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Plan als LosslessCut-CSV
+              </button>
             </div>
 
             {/* Deviation Notice */}

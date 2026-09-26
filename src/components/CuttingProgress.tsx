@@ -34,6 +34,10 @@ export const CuttingProgress: React.FC<CuttingProgressProps> = ({
             ? 'Kapitel werden geschrieben'
             : job.type === 'merge'
             ? 'Videos werden verlustfrei zusammengefügt'
+            : job.type === 'remux'
+            ? `Wird als ${(job.remuxTarget || '').toUpperCase()} neu verpackt`
+            : job.type === 'audio'
+            ? 'Tonspur wird herausgezogen'
             : 'Video wird verlustfrei getrennt'}
         </h3>
         <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1 truncate max-w-lg mx-auto">
@@ -47,7 +51,7 @@ export const CuttingProgress: React.FC<CuttingProgressProps> = ({
           <span>
             {isVerifying
               ? 'Bitgenaue Paket-Prüfung'
-              : job.type === 'chapters' || job.type === 'merge'
+              : job.type === 'chapters' || job.type === 'merge' || job.type === 'remux' || job.type === 'audio'
               ? 'Kopiere Pakete …'
               : job.currentPart > 0 && job.totalParts > 0
               ? `Teil ${job.currentPart} von ${job.totalParts}`

@@ -7,6 +7,9 @@ export interface VerifyOptions {
   isCancelled?: () => boolean;
   /** 'subsequence': Ausgabe muss ein zusammenhängender Ausschnitt des Originals sein (Trimmen) */
   mode?: 'exact' | 'subsequence';
+  /** Stream-Auswahl (ffmpeg -map) für Eingaben bzw. Ausgaben, z. B. nur eine Tonspur */
+  inputMap?: string[];
+  outputMap?: string[];
 }
 
 interface StreamPacketsCollector {
@@ -18,28 +21,15 @@ function extractFramemd5(
   filePath: string,
   collector: StreamPacketsCollector,
   onPacket?: () => void,
-  isCancelled?: () => boolean
+  isCancelled?: () => boolean,
+  mapArgs: string[] = ['-map', '0:v', '-map', '0:a?']
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     if (isCancelled && isCancelled()) {
       return reject(new Error('Verifizierung abgebrochen'));
     }
 
-    const args = [
-      '-v',
-      'error',
-      '-i',
-      filePath,
-      '-map',
-      '0:v',
-      '-map',
-      '0:a?',
-      '-c',
-      'copy',
-      '-f',
-      'framemd5',
-      '-',
-    ];
+    const args = ['-v', 'error', '-i', filePath, ...mapArgs, '-c', 'copy', '-f', 'framemd5', '-'];
 
     const child: ChildProcess = spawn('ffmpeg', args);
     let stderr = '';
@@ -161,7 +151,8 @@ export async function verifySequence(
           options.onProgress(totalPacketsProcessed);
         }
       },
-      options?.isCancelled
+      options?.isCancelled,
+      options?.inputMap
     );
   }
 
@@ -181,7 +172,8 @@ export async function verifySequence(
           options.onProgress(totalPacketsProcessed, estimatedTotal);
         }
       },
-      options?.isCancelled
+      options?.isCancelled,
+      options?.outputMap
     );
   }
 
