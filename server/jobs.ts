@@ -178,7 +178,14 @@ class JobQueue extends EventEmitter {
   }
 
   /** Bit-Prüfung Original(e) vs. Ausgabe(n) als Phase 'verify', abschaltbar per Einstellung. */
-  private async runVerification(job: Job, inputs: string[], outputs: string[], packetEstimate: number, result: SplitResult): Promise<void> {
+  private async runVerification(
+    job: Job,
+    inputs: string[],
+    outputs: string[],
+    packetEstimate: number,
+    result: SplitResult,
+    mode: 'exact' | 'subsequence' = 'exact'
+  ): Promise<void> {
     if (!loadSettings().verifyAfterSplit) {
       result.verification = { ok: true, skipped: true, streams: [], durationMs: 0 };
       return;
@@ -198,6 +205,7 @@ class JobQueue extends EventEmitter {
         }
       },
       isCancelled: () => this.isCancelled(job),
+      mode,
     });
     result.verification = verification;
     if (!verification.ok && verification.errorMessage) {
@@ -284,7 +292,7 @@ class JobQueue extends EventEmitter {
       }
 
       // Standard: Schnitt
-      const plan = planSplit(probe.duration, probe.keyframes, nextJob.mode);
+      const plan = planSplit(probe.duration, probe.keyframes, nextJob.mode, probe.gopBytes);
       nextJob.totalParts = plan.parts.length;
       this.emit(`job:${nextJob.id}`, nextJob);
 
@@ -301,7 +309,14 @@ class JobQueue extends EventEmitter {
       if (this.isCancelled(nextJob)) return;
 
       const partPaths = result.files.map((f) => path.join(result.outputDir, f.name));
-      await this.runVerification(nextJob, [resolved.absPath], partPaths, this.packetEstimate([probe]), result);
+      await this.runVerification(
+        nextJob,
+        [resolved.absPath],
+        partPaths,
+        this.packetEstimate([probe]),
+        result,
+        nextJob.mode.type === 'trim' ? 'subsequence' : 'exact'
+      );
       if (this.isCancelled(nextJob)) return;
       nextJob.currentPart = plan.parts.length;
       this.finishJob(nextJob, result);

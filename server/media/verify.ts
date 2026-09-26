@@ -5,6 +5,8 @@ import type { StreamVerification, VerificationResult } from '../types.js';
 export interface VerifyOptions {
   onProgress?: (packetsProcessed: number, estimatedTotalPackets?: number) => void;
   isCancelled?: () => boolean;
+  /** 'subsequence': Ausgabe muss ein zusammenhängender Ausschnitt des Originals sein (Trimmen) */
+  mode?: 'exact' | 'subsequence';
 }
 
 interface StreamPacketsCollector {
@@ -203,22 +205,42 @@ export async function verifySequence(
 
     let mismatchAt: number | undefined;
 
-    const minLen = Math.min(inPackets.length, outPackets.length);
-    for (let i = 0; i < minLen; i++) {
-      if (inPackets[i] !== outPackets[i]) {
-        mismatchAt = i + 1; // 1-indexed packet position
-        break;
+    if (options?.mode === 'subsequence') {
+      // Ausschnitt: die Ausgabe muss irgendwo im Original als zusammenhängende Folge vorkommen
+      let found = outPackets.length === 0;
+      for (let start = 0; !found && start + outPackets.length <= inPackets.length; start++) {
+        if (inPackets[start] !== outPackets[0]) continue;
+        let ok = true;
+        for (let j = 1; j < outPackets.length; j++) {
+          if (inPackets[start + j] !== outPackets[j]) {
+            ok = false;
+            break;
+          }
+        }
+        found = ok;
       }
-    }
+      if (!found) mismatchAt = 1;
+    } else {
+      const minLen = Math.min(inPackets.length, outPackets.length);
+      for (let i = 0; i < minLen; i++) {
+        if (inPackets[i] !== outPackets[i]) {
+          mismatchAt = i + 1; // 1-indexed packet position
+          break;
+        }
+      }
 
-    if (mismatchAt === undefined && inPackets.length !== outPackets.length) {
-      mismatchAt = minLen + 1;
+      if (mismatchAt === undefined && inPackets.length !== outPackets.length) {
+        mismatchAt = minLen + 1;
+      }
     }
 
     if (mismatchAt !== undefined) {
       overallOk = false;
       if (!firstErrorMessage) {
-        firstErrorMessage = `${kind === 'video' ? 'Videospur' : 'Audiospur'} ${streamIdx} weicht ab Paket ${mismatchAt} ab (Original: ${inPackets.length} Pakete, Teile: ${outPackets.length} Pakete).`;
+        firstErrorMessage =
+          options?.mode === 'subsequence'
+            ? `${kind === 'video' ? 'Videospur' : 'Audiospur'} ${streamIdx}: Der Ausschnitt (${outPackets.length} Pakete) ist keine zusammenhängende Folge des Originals (${inPackets.length} Pakete).`
+            : `${kind === 'video' ? 'Videospur' : 'Audiospur'} ${streamIdx} weicht ab Paket ${mismatchAt} ab (Original: ${inPackets.length} Pakete, Teile: ${outPackets.length} Pakete).`;
       }
     }
 

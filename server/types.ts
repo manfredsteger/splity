@@ -30,6 +30,8 @@ export interface ProbeResult {
   subtitleTrackCount: number;
   hasDataStreams: boolean;
   keyframes: number[]; // Relative seconds from 0, sorted
+  /** Bytes aller Streams je Keyframe-Abschnitt, gleiche Länge wie keyframes (ab probeVersion 3) */
+  gopBytes?: number[];
   keyframeIntervalAvg: number; // Average gap in seconds
   keyframeIntervalMax: number; // Maximum gap in seconds
   analyzedAt: string;
@@ -48,6 +50,10 @@ export interface ResolvedVideo {
 export type SplitMode =
   | { type: 'count'; n: number }
   | { type: 'every'; seconds: number }
+  /** Teile mit maximaler Dateigröße (Bytes); Schnitte an Keyframes, Summe der Paketgrößen je Keyframe-Abschnitt */
+  | { type: 'size'; maxBytes: number }
+  /** Nur einen Bereich behalten (Sekunden), Grenzen landen auf Keyframes */
+  | { type: 'trim'; start: number; end: number }
   | {
       type: 'points';
       times: number[];
@@ -97,6 +103,10 @@ export interface Part {
   start: number;
   end: number;
   duration: number;
+  /** Geschätzte Größe in Bytes (Summe der Paketgrößen), falls die Analyse sie kennt */
+  bytes?: number;
+  /** false = Teil wird nach dem Schnitt verworfen (Trimmen) */
+  keep?: boolean;
 }
 
 export interface SplitPlan {

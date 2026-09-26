@@ -47,6 +47,7 @@ export interface ProbeResult {
   subtitleTrackCount: number;
   hasDataStreams: boolean;
   keyframes: number[];
+  gopBytes?: number[];
   keyframeIntervalAvg: number;
   keyframeIntervalMax?: number;
   analyzedAt: string;
@@ -55,6 +56,8 @@ export interface ProbeResult {
 export type SplitMode =
   | { type: 'count'; n: number }
   | { type: 'every'; seconds: number }
+  | { type: 'size'; maxBytes: number }
+  | { type: 'trim'; start: number; end: number }
   | { type: 'points'; times: number[]; minPartSeconds?: number; origin?: 'scenes' | 'manual' };
 
 export type SceneSensitivity = 'low' | 'mid' | 'high';
@@ -92,6 +95,8 @@ export interface Part {
   start: number;
   end: number;
   duration: number;
+  bytes?: number;
+  keep?: boolean;
 }
 
 export interface SplitPlan {

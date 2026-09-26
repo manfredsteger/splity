@@ -152,6 +152,11 @@ ffmpeg -hide_banner -nostdin -y -i <quelle> \
 - **Zusammenfügen** (`server/media/merge.ts`, Job-Typ `merge`): Vorprüfung `checkMergeCompatibility` (reine Funktion, gegen die erste Datei: Video-Codec, Auflösung, Pixelformat, Profil, Bildrate; je Tonspur Codec, Abtastrate, Kanäle; Anzahl Tonspuren). Dafür liefert die Analyse ab `probeVersion 2` alle Tonspuren (ältere Cache-Einträge werden neu analysiert). Ausführung mit dem concat-Demuxer (`-f concat -safe 0 -auto_convert 0` – **ohne `-auto_convert 0` schleust ffmpeg SPS/PPS in das erste Paket jeder Datei ein und die Ausgabe ist nicht mehr bit-identisch**; Listendatei in `DATA_DIR/tmp`, Apostrophe als `'\''`), `-map_metadata 0 -c copy -avoid_negative_ts make_zero`; Container = erste Datei; Datenspur-Fallback wie beim Schnitt. Ausgabe `Fertig/<Name> (zusammengefügt)/…`, danach `verifySequence(inputs, [output])`.
 - **Quelle `out`** (`sources.ts`): der Fertig-Ordner als dritte Videoquelle (`out:<base64url(Ordner/Datei)>`, nie löschbar), damit fertige Teile zusammengefügt oder erneut geschnitten werden können. `GET /api/merge/outputs` listet die Fertig-Ordner mit ihren Videodateien (nach Name sortiert, numerisch).
 
+## Größen-Modus und Ausschnitt (Später-Liste)
+
+- **Max. Größe je Teil** (`mode: size`): Die Analyse liest ab `probeVersion 3` **alle** Pakete (`packet=stream_index,pts_time,dts_time,size,flags`, Reihenfolge = ffprobe-intern) und summiert die Bytes aller Streams je Keyframe-Abschnitt (`gopBytes`, gleiche Länge wie `keyframes`). `planBySize` addiert Abschnitte greedy und schneidet am ersten Keyframe, dessen Abschnitt das Limit sprengen würde (Reserve 1,5 % für den Container). Ein einzelner Abschnitt über dem Limit lässt sich verlustfrei nicht kleiner machen → Warnung. Jeder Teil bekommt `bytes` (Schätzung) für die Anzeige.
+- **Ausschnitt** (`mode: trim`): Anfang/Ende landen auf Keyframes, der Segment-Muxer schneidet wie immer, danach werden die Teile außerhalb des Bereichs verworfen (`part.keep === false`), der Rest heißt `<name> (Ausschnitt hh-mm-ss bis hh-mm-ss).<ext>`. Die Bit-Prüfung läuft im Modus `subsequence`: Die Ausgabe muss je Stream eine **zusammenhängende Teilfolge** der Originalpakete sein.
+
 ## 5. Nicht verändern (Goldene Regeln)
 
 1. **Dockerfile**: `COPY package.json ./`, **nicht** `package*.json`! Die Datei `.dockerignore` muss zwingend erhalten bleiben.

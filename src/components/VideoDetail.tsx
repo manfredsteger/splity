@@ -24,7 +24,19 @@ import { Timeline, type TimelineMarker } from './Timeline.js';
 import { formatBytes, formatTime } from '../utils/format.js';
 import type { Job, ProbeResult, SceneDetectionResult, SceneSensitivity, SplitMode, SplitPlan } from '../types.js';
 
-type ModeType = 'count' | 'every' | 'scenes';
+type ModeType = 'count' | 'every' | 'size' | 'trim' | 'scenes';
+
+const MB = 1024 * 1024;
+
+/** "hh:mm:ss", "mm:ss" oder Sekunden -> Sekunden (NaN bei Unsinn) */
+export function parseTimeInput(text: string): number {
+  const t = text.trim().replace(',', '.');
+  if (!t) return NaN;
+  if (/^\d+(\.\d+)?$/.test(t)) return parseFloat(t);
+  const parts = t.split(':').map((x) => parseFloat(x));
+  if (parts.some((x) => Number.isNaN(x))) return NaN;
+  return parts.reduce((acc, x) => acc * 60 + x, 0);
+}
 
 const SENSITIVITY_LABELS: Record<SceneSensitivity, { label: string; hint: string }> = {
   low: { label: 'Niedrig', hint: 'nur harte Schnitte' },
@@ -63,6 +75,10 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   const [modeType, setModeType] = useState<ModeType>('count');
   const [partCount, setPartCount] = useState<number>(defaultParts || 8);
   const [everyMinutes, setEveryMinutes] = useState<number>(10);
+  const [maxSizeMb, setMaxSizeMb] = useState<number>(2000);
+  const [trimStartText, setTrimStartText] = useState<string>('00:00:00');
+  const [trimEndText, setTrimEndText] = useState<string>('');
+  const [playerTime, setPlayerTime] = useState<number>(0);
   const [plan, setPlan] = useState<SplitPlan | null>(null);
   const [hoveredPartIndex, setHoveredPartIndex] = useState<number | null>(null);
   const [, startTransition] = useTransition();
@@ -213,11 +229,20 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
     ? `${eingangHostPath.replace(/\/+$/, '')}/${probe.filename}`
     : probe.filename;
 
+  const trimStart = parseTimeInput(trimStartText);
+  const trimEndRaw = parseTimeInput(trimEndText);
+  const trimEnd = Number.isNaN(trimEndRaw) && trimEndText.trim() === '' ? probe.duration : trimEndRaw;
+  const trimValid = !Number.isNaN(trimStart) && !Number.isNaN(trimEnd) && trimStart >= 0 && trimEnd > trimStart && trimEnd <= probe.duration + 0.5;
+
   const currentMode: SplitMode =
     modeType === 'count'
       ? { type: 'count', n: partCount }
       : modeType === 'every'
       ? { type: 'every', seconds: everyMinutes * 60 }
+      : modeType === 'size'
+      ? { type: 'size', maxBytes: Math.max(1, Math.round(maxSizeMb)) * MB }
+      : modeType === 'trim'
+      ? { type: 'trim', start: trimValid ? trimStart : 0, end: trimValid ? Math.min(trimEnd, probe.duration) : probe.duration }
       : { type: 'points', times: boundaryTimes, minPartSeconds, origin: 'scenes' };
 
   // Fetch plan with debounce 150ms
@@ -243,7 +268,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
     }, 150);
 
     return () => clearTimeout(timer);
-  }, [videoId, modeType, partCount, everyMinutes, boundaryKey, minPartSeconds]);
+  }, [videoId, modeType, partCount, everyMinutes, boundaryKey, minPartSeconds, maxSizeMb, trimStartText, trimEndText]);
 
   // Keyboard navigation: Enter = cut, ArrowUp/ArrowDown = parts +1 / -1
   useEffect(() => {
@@ -253,7 +278,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
 
       if (e.key === 'ArrowUp') {
-        if (modeType === 'scenes') return;
+        if (modeType !== 'count' && modeType !== 'every') return;
         e.preventDefault();
         if (modeType === 'count') {
           setPartCount((prev) => Math.min(200, prev + 1));
@@ -261,7 +286,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
           setEveryMinutes((prev) => prev + 1);
         }
       } else if (e.key === 'ArrowDown') {
-        if (modeType === 'scenes') return;
+        if (modeType !== 'count' && modeType !== 'every') return;
         e.preventDefault();
         if (modeType === 'count') {
           setPartCount((prev) => Math.max(2, prev - 1));
@@ -282,6 +307,16 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
 
   const quickChipsCount = [2, 3, 4, 5, 8, 10];
   const quickChipsMinutes = [1, 2, 5, 10, 15, 30];
+  const quickChipsSize: Array<{ label: string; mb: number }> = [
+    { label: '100 MB', mb: 100 },
+    { label: '500 MB', mb: 500 },
+    { label: '1 GB', mb: 1024 },
+    { label: '2 GB', mb: 2048 },
+    { label: '4 GB', mb: 4096 },
+  ];
+  const keptParts = plan ? plan.parts.filter((p) => p.keep !== false) : [];
+  const hasSizes = !!plan && plan.parts.some((p) => typeof p.bytes === 'number');
+  const largestPart = hasSizes ? Math.max(...keptParts.map((p) => p.bytes || 0)) : 0;
 
   const totalCalculatedParts = plan?.parts.length || (modeType === 'count' ? partCount : 1);
 
@@ -389,7 +424,9 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
             {showPlayer ? 'Ausblenden' : 'Einblenden'}
           </button>
         </div>
-        {showPlayer && <VideoPlayer ref={playerRef} videoId={videoId} container={probe.container} codec={probe.video?.codec} />}
+        {showPlayer && (
+          <VideoPlayer ref={playerRef} videoId={videoId} container={probe.container} codec={probe.video?.codec} onTimeUpdate={setPlayerTime} />
+        )}
       </div>
 
       {/* Split Control & Mode Switcher */}
@@ -416,6 +453,26 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
               }`}
             >
               Alle X Minuten
+            </button>
+            <button
+              onClick={() => setModeType('size')}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
+                modeType === 'size'
+                  ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              Max. Größe
+            </button>
+            <button
+              onClick={() => setModeType('trim')}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
+                modeType === 'trim'
+                  ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              Ausschnitt
             </button>
             <button
               onClick={() => setModeType('scenes')}
@@ -567,8 +624,92 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
           </div>
         )}
 
+        {/* Größen-Modus */}
+        {modeType === 'size' && (
+          <div className="space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <label className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Max. Größe je Teil</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={1048576}
+                  step={50}
+                  value={maxSizeMb}
+                  onChange={(e) => setMaxSizeMb(Math.max(1, Number(e.target.value) || 1))}
+                  className="w-28 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-lg font-mono font-bold text-zinc-900 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-blue-500/30"
+                />
+                <span className="text-sm font-semibold text-blue-600 dark:text-blue-400">MB</span>
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-zinc-400 mr-1">Schnellwahl:</span>
+                {quickChipsSize.map((c) => (
+                  <button
+                    key={c.mb}
+                    type="button"
+                    onClick={() => setMaxSizeMb(c.mb)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      maxSizeMb === c.mb
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                    }`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+              Splity summiert die Paketgrößen je Keyframe-Abschnitt und schneidet, bevor ein Teil das Limit überschreitet (1,5 % Reserve für den Container). Praktisch für Upload-Grenzen.
+              {hasSizes && largestPart > 0 && (
+                <span className="ml-1 font-medium text-zinc-700 dark:text-zinc-300">Größter Teil: ca. {formatBytes(largestPart)}.</span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Ausschnitt (Trimmen) */}
+        {modeType === 'trim' && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {(['start', 'end'] as const).map((which) => {
+                const value = which === 'start' ? trimStartText : trimEndText;
+                const setValue = which === 'start' ? setTrimStartText : setTrimEndText;
+                return (
+                  <div key={which} className="space-y-1.5">
+                    <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{which === 'start' ? 'Anfang' : 'Ende'}</div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={value}
+                        placeholder={which === 'start' ? '00:00:00' : formatTime(probe.duration)}
+                        onChange={(e) => setValue(e.target.value)}
+                        className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 font-mono text-base font-bold text-zinc-900 dark:text-zinc-100 focus:outline-hidden focus:ring-2 focus:ring-blue-500/30"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setValue(formatTime(Math.floor(playerTime)))}
+                        disabled={!showPlayer}
+                        title="Aktuelle Position im Player übernehmen"
+                        className="shrink-0 px-3 py-2 rounded-xl text-xs font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        = Player ({formatTime(playerTime)})
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+              {trimValid
+                ? `Behalten wird ${formatTime(trimStart)} – ${formatTime(trimEnd)}; beide Grenzen landen auf dem nächsten Keyframe, der Rest wird verworfen. Format hh:mm:ss, mm:ss oder Sekunden.`
+                : 'Bitte Anfang und Ende als hh:mm:ss angeben – das Ende muss nach dem Anfang liegen.'}
+            </div>
+          </div>
+        )}
+
         {/* Counter & Chips */}
-        {modeType !== 'scenes' && (
+        {(modeType === 'count' || modeType === 'every') && (
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <button
@@ -671,8 +812,16 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
         {plan && plan.parts.length > 0 && (
           <div className="space-y-3">
             <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-              <span>Vorschau der {plan.parts.length} Teilstücke</span>
-              <span>Dauer pro Teil: ca. {formatTime(plan.parts[0]?.duration || 0)}</span>
+              <span>
+                {modeType === 'trim'
+                  ? `Ausschnitt: ${keptParts.length} von ${plan.parts.length} Teilen wird behalten`
+                  : `Vorschau der ${plan.parts.length} Teilstücke`}
+              </span>
+              <span>
+                {hasSizes && modeType === 'size'
+                  ? `Größter Teil: ca. ${formatBytes(largestPart)}`
+                  : `Dauer pro Teil: ca. ${formatTime(keptParts[0]?.duration || plan.parts[0]?.duration || 0)}`}
+              </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-80 overflow-y-auto pr-1">
@@ -687,7 +836,9 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                     onClick={() => showPlayer && seek(p.start)}
                     title={showPlayer ? `Zu ${formatTime(p.start)} springen` : undefined}
                     className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all ${showPlayer ? 'cursor-pointer' : ''} ${
-                      isHovered
+                      p.keep === false
+                        ? 'border-dashed border-zinc-300 dark:border-zinc-700 opacity-50'
+                        : isHovered
                         ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/30 shadow-xs'
                         : 'border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40'
                     }`}
@@ -708,13 +859,14 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
 
                     <div className="min-w-0 flex-1">
                       <div className="font-bold text-xs text-zinc-900 dark:text-zinc-100">
-                        Teil {p.index}
+                        {p.keep === false ? 'Wird verworfen' : modeType === 'trim' ? 'Ausschnitt' : `Teil ${p.index}`}
                       </div>
                       <div className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate">
                         {formatTime(p.start)} – {formatTime(p.end)}
                       </div>
                       <div className="text-[11px] font-medium text-blue-600 dark:text-blue-400">
                         {formatTime(p.duration)}
+                        {typeof p.bytes === 'number' && <span className="text-zinc-400 font-normal"> · ca. {formatBytes(p.bytes)}</span>}
                       </div>
                     </div>
                   </div>
@@ -759,7 +911,12 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
         <div className="pt-2">
           <button
             onClick={() => onStartSplit(currentMode)}
-            disabled={isStartingSplit || !plan || plan.parts.length <= 1 || sceneProgress !== null}
+            disabled={
+              isStartingSplit ||
+              !plan ||
+              sceneProgress !== null ||
+              (modeType === 'trim' ? !trimValid || keptParts.length === 0 || plan.parts.length <= 1 : plan.parts.length <= 1)
+            }
             className="w-full py-4 px-6 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-300 dark:disabled:bg-zinc-800 text-white font-bold text-base transition-all shadow-md shadow-blue-600/20 hover:shadow-lg hover:shadow-blue-600/30 flex items-center justify-center gap-3 cursor-pointer disabled:cursor-not-allowed"
           >
             <Scissors className="w-5 h-5" />
@@ -770,6 +927,12 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                 ? scenes
                   ? 'Keine Szenengrenze gewählt'
                   : 'Erst Szenen erkennen'
+                : modeType === 'trim'
+                ? trimValid && keptParts.length > 0
+                  ? `Ausschnitt ${formatTime(keptParts[0].start)} – ${formatTime(keptParts[keptParts.length - 1].end)} speichern`
+                  : 'Bereich wählen'
+                : modeType === 'size'
+                ? `In ${totalCalculatedParts} Teile schneiden (max. ${maxSizeMb >= 1024 ? `${(maxSizeMb / 1024).toFixed(maxSizeMb % 1024 === 0 ? 0 : 1)} GB` : `${maxSizeMb} MB`})`
                 : `In ${totalCalculatedParts} Teile schneiden`}
             </span>
           </button>

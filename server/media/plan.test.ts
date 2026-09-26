@@ -100,4 +100,47 @@ describe('planSplit', () => {
     expect(plan.cuts[0].deltaSeconds).toBeCloseTo(-0.9, 3);
     expect(plan.maxDeltaSeconds).toBeCloseTo(0.9, 3);
   });
+
+  it('size-Modus: schneidet, bevor das Limit überschritten wird, und schätzt Bytes je Teil', () => {
+    const keyframes = [0, 2, 4, 6, 8, 10];
+    const gopBytes = [100, 100, 100, 100, 100, 100]; // 600 Bytes gesamt
+    const plan = planSplit(12, keyframes, { type: 'size', maxBytes: 300 }, gopBytes);
+    // Limit 300 * 0.985 = 295 -> je 2 Abschnitte (200) pro Teil
+    expect(plan.cuts.map((c) => c.actualTime)).toEqual([4, 8]);
+    expect(plan.parts.map((p) => p.bytes)).toEqual([200, 200, 200]);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('size-Modus: warnt bei einem Abschnitt über dem Limit', () => {
+    const plan = planSplit(6, [0, 2, 4], { type: 'size', maxBytes: 100 }, [50, 500, 50]);
+    expect(plan.cuts.map((c) => c.actualTime)).toEqual([2, 4]);
+    expect(plan.warnings[0]).toContain('größer als das Limit');
+  });
+
+  it('size-Modus ohne Größeninformation liefert einen Teil mit Warnung', () => {
+    const plan = planSplit(30, [0, 10, 20], { type: 'size', maxBytes: 1000 });
+    expect(plan.parts.length).toBe(1);
+    expect(plan.warnings[0]).toContain('Größeninformation fehlt');
+  });
+
+  it('trim-Modus: behält nur den Bereich, Grenzen auf Keyframes', () => {
+    const keyframes = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30];
+    const plan = planSplit(30, keyframes, { type: 'trim', start: 5.2, end: 21.1 });
+    expect(plan.cuts.map((c) => c.actualTime)).toEqual([6, 22]);
+    expect(plan.parts.map((p) => [p.start, p.end, p.keep])).toEqual([
+      [0, 6, false],
+      [6, 22, true],
+      [22, 30, false],
+    ]);
+  });
+
+  it('trim-Modus: Anfang bei 0 bzw. Ende bei der Dauer erzeugt nur einen Schnitt', () => {
+    const keyframes = [0, 2, 4, 6, 8, 10];
+    const plan = planSplit(10, keyframes, { type: 'trim', start: 0, end: 6.3 });
+    expect(plan.cuts.map((c) => c.actualTime)).toEqual([6]);
+    expect(plan.parts.map((p) => p.keep)).toEqual([true, false]);
+    const plan2 = planSplit(10, keyframes, { type: 'trim', start: 3.9, end: 10 });
+    expect(plan2.cuts.map((c) => c.actualTime)).toEqual([4]);
+    expect(plan2.parts.map((p) => p.keep)).toEqual([false, true]);
+  });
 });

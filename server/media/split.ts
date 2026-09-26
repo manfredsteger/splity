@@ -371,6 +371,8 @@ export function executeSplit(
     const settings = loadSettings();
     const resultFiles: SplitResultFile[] = [];
     let sumDurations = 0;
+    const isTrim = plan.parts.some((p) => p.keep === false);
+    const expectedParts = plan.parts.filter((p) => p.keep !== false);
 
     for (let i = 0; i < generatedRawFiles.length; i++) {
       const rawName = generatedRawFiles[i];
@@ -378,15 +380,24 @@ export function executeSplit(
       const partIndex = i + 1;
 
       const part = plan.parts[i];
-      const finalPartName = formatPartFileName(
-        settings.namePattern,
-        cleanBaseName,
-        partIndex,
-        generatedRawFiles.length,
-        targetExt,
-        part?.start ?? 0,
-        part?.end ?? 0
-      );
+      if (isTrim && part && part.keep === false) {
+        // Trimmen: Teile außerhalb des Bereichs verwerfen
+        fs.rmSync(rawPath, { force: true });
+        continue;
+      }
+      const finalPartName = isTrim
+        ? sanitizeFileName(
+            `${cleanBaseName} (Ausschnitt ${formatHms(part?.start ?? 0)} bis ${formatHms(part?.end ?? 0)})`
+          ) + targetExt
+        : formatPartFileName(
+            settings.namePattern,
+            cleanBaseName,
+            partIndex,
+            generatedRawFiles.length,
+            targetExt,
+            part?.start ?? 0,
+            part?.end ?? 0
+          );
 
       const newPath = path.join(tmpDirPath, finalPartName);
       fs.renameSync(rawPath, newPath);
@@ -407,17 +418,18 @@ export function executeSplit(
 
     // Post-cut verification:
     // Check file count
-    if (resultFiles.length !== plan.parts.length) {
+    if (resultFiles.length !== expectedParts.length) {
       warnings.push(
-        `Anzahl erzeugter Dateien (${resultFiles.length}) weicht vom Plan (${plan.parts.length}) ab.`
+        `Anzahl erzeugter Dateien (${resultFiles.length}) weicht vom Plan (${expectedParts.length}) ab.`
       );
     }
 
-    // Check sum of durations ≈ original duration (tolerance: 1s + 1 GOP approx 3s)
+    // Check sum of durations ≈ expected duration (tolerance: 1s + 1 GOP approx 3s)
+    const expectedDuration = isTrim ? expectedParts.reduce((s, p) => s + p.duration, 0) : probe.duration;
     const tolerance = 1.0 + Math.max(1.0, probe.keyframeIntervalAvg);
-    if (Math.abs(sumDurations - probe.duration) > tolerance) {
+    if (Math.abs(sumDurations - expectedDuration) > tolerance) {
       warnings.push(
-        `Dauer-Abweichung: Original ${probe.duration.toFixed(1)} s, Summe der Teile ${sumDurations.toFixed(1)} s.`
+        `Dauer-Abweichung: erwartet ${expectedDuration.toFixed(1)} s, Summe der Teile ${sumDurations.toFixed(1)} s.`
       );
     }
 

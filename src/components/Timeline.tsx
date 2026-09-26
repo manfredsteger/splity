@@ -69,6 +69,7 @@ export const Timeline: React.FC<TimelineProps> = ({
           const widthPercent = (part.duration / duration) * 100;
           const isEven = idx % 2 === 0;
           const isHovered = activePartIndex === part.index;
+          const isDropped = part.keep === false;
 
           return (
             <div
@@ -76,16 +77,18 @@ export const Timeline: React.FC<TimelineProps> = ({
               onMouseEnter={() => onHoverPart?.(part.index)}
               onMouseLeave={() => onHoverPart?.(null)}
               className={`relative h-full transition-all duration-150 flex flex-col justify-center px-1.5 cursor-pointer ${
-                isEven
+                isDropped
+                  ? 'bg-zinc-300 dark:bg-zinc-700 hover:bg-zinc-400 dark:hover:bg-zinc-600'
+                  : isEven
                   ? 'bg-blue-600 hover:bg-blue-500'
                   : 'bg-blue-700 hover:bg-blue-600'
               } ${isHovered ? 'ring-2 ring-white/80 z-10' : ''}`}
               style={{ width: `${widthPercent}%` }}
-              title={`Teil ${part.index}: ${formatTime(part.start)} – ${formatTime(part.end)} (${formatTime(part.duration)})`}
+              title={`${isDropped ? 'Wird verworfen' : `Teil ${part.index}`}: ${formatTime(part.start)} – ${formatTime(part.end)} (${formatTime(part.duration)})`}
             >
               {/* Part Label */}
-              <div className="text-white text-xs font-bold truncate text-center drop-shadow-xs">
-                {widthPercent > 6 ? `T${part.index}` : ''}
+              <div className={`text-xs font-bold truncate text-center drop-shadow-xs ${isDropped ? 'text-zinc-500 dark:text-zinc-400' : 'text-white'}`}>
+                {widthPercent > 6 ? (isDropped ? '×' : `T${part.index}`) : ''}
               </div>
               {widthPercent > 12 && (
                 <div className="text-blue-100 text-[10px] truncate text-center font-mono opacity-90">

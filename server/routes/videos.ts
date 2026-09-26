@@ -36,6 +36,18 @@ function parseSplitMode(raw: unknown): SplitMode | null {
     if (!Number.isFinite(seconds) || seconds < 10) return null;
     return { type: 'every', seconds };
   }
+  if (mode.type === 'size') {
+    const maxBytes = Number(mode.maxBytes);
+    // 1 MB bis 1 TB
+    if (!Number.isFinite(maxBytes) || maxBytes < 1024 * 1024 || maxBytes > 1024 ** 4) return null;
+    return { type: 'size', maxBytes: Math.floor(maxBytes) };
+  }
+  if (mode.type === 'trim') {
+    const start = Number(mode.start);
+    const end = Number(mode.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) return null;
+    return { type: 'trim', start, end };
+  }
   if (mode.type === 'points') {
     if (!Array.isArray(mode.times)) return null;
     const times = mode.times.map(Number);
@@ -531,7 +543,7 @@ videosRouter.post('/:id/plan', async (req, res, next) => {
     }
 
     const probe = await probeVideo(resolved, req.params.id);
-    const plan = planSplit(probe.duration, probe.keyframes, mode);
+    const plan = planSplit(probe.duration, probe.keyframes, mode, probe.gopBytes);
 
     res.json(plan);
   } catch (err: any) {

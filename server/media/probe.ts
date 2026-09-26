@@ -8,7 +8,7 @@ import { CACHE_DIR, THUMBS_DIR } from '../config.js';
 import type { AudioStreamInfo, ProbeResult, ResolvedVideo, VideoStreamInfo } from '../types.js';
 
 /** Cache-Format der Analyse; ältere Einträge werden neu analysiert (v2: Tonspur-Details für Merge) */
-export const PROBE_VERSION = 2;
+export const PROBE_VERSION = 3;
 
 export function getVideoCacheKey(source: string, relPath: string, size: number, mtimeMs: number): string {
   const data = `${source}_${relPath}_${size}_${mtimeMs}`;
@@ -154,8 +154,9 @@ export function startVideoAnalysis(resolved: ResolvedVideo, videoId: string): Pr
         }
       }
 
-      // 2. Extract keyframes with live progress
-      const rawKeyframes = await runFfprobeKeyframes(resolved.absPath, (latestTime) => {
+      // 2. Extract keyframes (+ Bytes je Keyframe-Abschnitt) with live progress
+      const videoStreamIndex = (metadata.streams || []).find((st) => st.codec_type === 'video')?.index ?? 0;
+      const rawGops = await runFfprobeKeyframes(resolved.absPath, videoStreamIndex, (latestTime) => {
         if (duration > 0) {
           // Paketzeiten sind absolut (bei .ts oft ab 100 s+): start_time abziehen, sonst
           // springt der Fortschritt sofort auf 99 %.
@@ -169,20 +170,20 @@ export function startVideoAnalysis(resolved: ResolvedVideo, videoId: string): Pr
         }
       });
 
-      // Normalize keyframes: subtract startTime
-      const relativeKeyframesSet = new Set<number>();
-      for (const kf of rawKeyframes) {
-        const rel = kf - startTime;
-        if (rel >= -0.01) {
-          const rounded = Math.round(Math.max(0, rel) * 1000) / 1000;
-          relativeKeyframesSet.add(rounded);
-        }
+      // Normalize keyframes: subtract startTime, Duplikate zusammenlegen (Bytes addieren)
+      const gopMap = new Map<number, number>();
+      for (const g of rawGops) {
+        const rel = g.time - startTime;
+        if (rel < -0.01) continue;
+        const rounded = Math.round(Math.max(0, rel) * 1000) / 1000;
+        gopMap.set(rounded, (gopMap.get(rounded) || 0) + g.bytes);
       }
-
-      let keyframes = Array.from(relativeKeyframesSet).sort((a, b) => a - b);
-      if (keyframes.length === 0 || keyframes[0] > 0.1) {
-        keyframes.unshift(0);
+      const gops = Array.from(gopMap.entries()).sort((a, b) => a[0] - b[0]);
+      if (gops.length === 0 || gops[0][0] > 0.1) {
+        gops.unshift([0, 0]);
       }
+      const keyframes = gops.map((g) => g[0]);
+      const gopBytes = gops.map((g) => g[1]);
 
       // Average and maximum keyframe intervals
       let keyframeIntervalAvg = 2.0;
@@ -216,6 +217,7 @@ export function startVideoAnalysis(resolved: ResolvedVideo, videoId: string): Pr
         subtitleTrackCount,
         hasDataStreams,
         keyframes,
+        gopBytes,
         keyframeIntervalAvg,
         keyframeIntervalMax,
         analyzedAt: new Date().toISOString(),
@@ -263,6 +265,7 @@ interface FfprobeRawOutput {
     size?: string;
   };
   streams?: Array<{
+    index?: number;
     codec_type?: string;
     codec_name?: string;
     width?: number;
@@ -320,25 +323,35 @@ function runFfprobeMetadata(filePath: string): Promise<FfprobeRawOutput> {
   });
 }
 
+export interface RawGop {
+  time: number;
+  bytes: number;
+}
+
+/**
+ * Alle Pakete ohne Decodieren lesen: Keyframes der Videospur + Bytes ALLER Streams je
+ * Keyframe-Abschnitt (für den Größen-Modus). ffprobe gibt die Felder in seiner internen
+ * Reihenfolge aus: stream_index, pts_time, dts_time, size, flags.
+ */
 function runFfprobeKeyframes(
   filePath: string,
+  videoStreamIndex: number,
   onPacketTime?: (time: number) => void
-): Promise<number[]> {
+): Promise<RawGop[]> {
   return new Promise((resolve, reject) => {
     const args = [
       '-v',
       'error',
-      '-select_streams',
-      'v:0',
       '-show_entries',
-      'packet=pts_time,dts_time,flags',
+      'packet=stream_index,pts_time,dts_time,size,flags',
       '-of',
       'csv=p=0',
       filePath,
     ];
 
     const child = spawn('ffprobe', args);
-    const keyframes: number[] = [];
+    const gops: RawGop[] = [];
+    let current: RawGop | null = null;
     let stderr = '';
 
     child.stderr.on('data', (d) => {
@@ -352,24 +365,27 @@ function runFfprobeKeyframes(
 
     rl.on('line', (line) => {
       const parts = line.split(',');
-      if (parts.length >= 3) {
-        const ptsStr = parts[0].trim();
-        const dtsStr = parts[1].trim();
-        const flags = parts[2].trim();
-        const timeStr = ptsStr && ptsStr !== 'N/A' ? ptsStr : dtsStr;
+      if (parts.length < 5) return;
+      const streamIdx = parseInt(parts[0], 10);
+      const ptsStr = parts[1].trim();
+      const dtsStr = parts[2].trim();
+      const size = parseInt(parts[3], 10) || 0;
+      const flags = parts[4].trim();
+      // pts_time kann bei MKV "N/A" sein, dann dts_time nehmen.
+      const timeStr = ptsStr && ptsStr !== 'N/A' ? ptsStr : dtsStr;
+      const t = timeStr && timeStr !== 'N/A' ? parseFloat(timeStr) : NaN;
 
-        if (timeStr && timeStr !== 'N/A') {
-          const t = parseFloat(timeStr);
-          if (!Number.isNaN(t)) {
-            if (onPacketTime) {
-              onPacketTime(t);
-            }
-            if (flags.includes('K')) {
-              keyframes.push(t);
-            }
-          }
-        }
+      if (streamIdx === videoStreamIndex && flags.includes('K') && !Number.isNaN(t)) {
+        current = { time: t, bytes: 0 };
+        gops.push(current);
+        if (onPacketTime) onPacketTime(t);
       }
+      if (!current) {
+        // Pakete vor dem ersten Keyframe (z. B. Audio) zählen zum ersten Abschnitt
+        current = { time: Number.isNaN(t) ? 0 : t, bytes: 0 };
+        gops.push(current);
+      }
+      current.bytes += size;
     });
 
     child.on('error', (err) => {
@@ -380,7 +396,7 @@ function runFfprobeKeyframes(
       if (code !== 0) {
         return reject(new Error(`ffprobe Keyframe-Fehler (Code ${code}): ${stderr}`));
       }
-      resolve(keyframes);
+      resolve(gops);
     });
   });
 }

@@ -4,10 +4,60 @@ import type { Cut, Part, SplitMode, SplitPlan } from '../types.js';
  * Calculates a lossless split plan by snapping ideal cut points to the nearest available keyframes.
  * Pure function: no I/O, no side-effects.
  */
+/** Sicherheitsabschlag für Container-Overhead (moov-Atom, Index) beim Größen-Modus */
+const SIZE_SAFETY = 0.985;
+
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
+/** Geschätzte Bytes eines Zeitbereichs aus den Keyframe-Abschnitten */
+export function estimateBytes(keyframes: number[], gopBytes: number[], start: number, end: number): number {
+  let sum = 0;
+  for (let i = 0; i < keyframes.length && i < gopBytes.length; i++) {
+    if (keyframes[i] >= start - 0.0005 && keyframes[i] < end - 0.0005) sum += gopBytes[i];
+  }
+  return sum;
+}
+
+function withBytes(parts: Part[], keyframes: number[], gopBytes?: number[]): Part[] {
+  if (!gopBytes || gopBytes.length !== keyframes.length) return parts;
+  return parts.map((p) => ({ ...p, bytes: estimateBytes(keyframes, gopBytes, p.start, p.end) }));
+}
+
+/**
+ * Größen-Modus: Keyframe-Abschnitte greedy aufsummieren, Schnitt am ersten Keyframe,
+ * dessen Abschnitt das Limit sprengen würde. Ein einzelner Abschnitt über dem Limit
+ * lässt sich verlustfrei nicht kleiner machen -> Warnung.
+ */
+function planBySize(duration: number, keyframes: number[], gopBytes: number[], maxBytes: number, warnings: string[]): number[] {
+  const limit = Math.max(1, Math.floor(maxBytes * SIZE_SAFETY));
+  const cuts: number[] = [];
+  let acc = 0;
+  let oversized = 0;
+  for (let i = 0; i < keyframes.length; i++) {
+    const g = gopBytes[i] || 0;
+    if (g > limit) oversized++;
+    if (acc > 0 && acc + g > limit && keyframes[i] > 0.05 && keyframes[i] < duration - 0.5) {
+      cuts.push(keyframes[i]);
+      acc = g;
+    } else {
+      acc += g;
+    }
+  }
+  if (oversized > 0) {
+    warnings.push(
+      `${oversized} Abschnitt${oversized === 1 ? '' : 'e'} zwischen zwei Keyframes ${oversized === 1 ? 'ist' : 'sind'} für sich schon größer als das Limit – verlustfrei geht es nicht kleiner, diese Teile werden größer.`
+    );
+  }
+  return cuts;
+}
+
 export function planSplit(
   duration: number,
   keyframes: number[],
-  mode: SplitMode
+  mode: SplitMode,
+  gopBytes?: number[]
 ): SplitPlan {
   const warnings: string[] = [];
 
@@ -49,6 +99,20 @@ export function planSplit(
       .filter((t) => t >= minThreshold && t <= maxThreshold)
       .sort((a, b) => a - b);
     requestedPartsCount = idealCutPoints.length + 1;
+  } else if (mode.type === 'trim') {
+    idealCutPoints = [mode.start, mode.end].filter((t) => t >= minThreshold && t <= maxThreshold);
+    requestedPartsCount = idealCutPoints.length + 1;
+    if (!(mode.end > mode.start)) {
+      warnings.push('Das Ende des Ausschnitts muss nach dem Anfang liegen.');
+      idealCutPoints = [];
+    }
+  } else if (mode.type === 'size') {
+    if (!gopBytes || gopBytes.length !== keyframes.length) {
+      warnings.push('Größeninformation fehlt – bitte das Video neu analysieren (ältere Analyse).');
+    } else {
+      idealCutPoints = planBySize(duration, keyframes, gopBytes, mode.maxBytes, warnings);
+    }
+    requestedPartsCount = idealCutPoints.length + 1;
   }
 
   if (candidateKeyframes.length === 0 || idealCutPoints.length === 0) {
@@ -59,14 +123,21 @@ export function planSplit(
     }
     return {
       cuts: [],
-      parts: [
-        {
-          index: 1,
-          start: 0,
-          end: Math.round(duration * 1000) / 1000,
-          duration: Math.round(duration * 1000) / 1000,
-        },
-      ],
+      parts: withBytes(
+        [
+          {
+            index: 1,
+            start: 0,
+            end: Math.round(duration * 1000) / 1000,
+            duration: Math.round(duration * 1000) / 1000,
+            // Trimmen ohne wirksame Grenze: deckt der Bereich das ganze Video ab, bleibt es (nichts
+            // zu schneiden); liegt er zwischen zwei Keyframes, gibt es nichts zu behalten.
+            ...(mode.type === 'trim' ? { keep: mode.start < minThreshold && mode.end > maxThreshold } : {}),
+          },
+        ],
+        keyframes,
+        gopBytes
+      ),
       warnings,
       maxDeltaSeconds: 0,
     };
@@ -174,9 +245,23 @@ export function planSplit(
       ? Math.max(...cuts.map((c) => Math.abs(c.deltaSeconds)))
       : 0;
 
+  let finalParts = withBytes(parts, keyframes, gopBytes);
+
+  // Trimmen: nur die Teile behalten, die innerhalb des (auf Keyframes gelegten) Bereichs liegen
+  if (mode.type === 'trim') {
+    const startCut = cuts.find((c) => Math.abs(c.idealTime - round3(mode.start)) < 0.0015 || c.idealTime === mode.start);
+    const endCut = cuts.find((c) => c !== startCut && (Math.abs(c.idealTime - round3(mode.end)) < 0.0015 || c.idealTime === mode.end));
+    const keepStart = mode.start < minThreshold ? 0 : startCut ? startCut.actualTime : 0;
+    const keepEnd = mode.end > maxThreshold ? round3(duration) : endCut ? endCut.actualTime : round3(duration);
+    finalParts = finalParts.map((p) => ({ ...p, keep: p.start >= keepStart - 0.0005 && p.end <= keepEnd + 0.0005 }));
+    if (!finalParts.some((p) => p.keep)) {
+      warnings.push('Der gewählte Bereich liegt zwischen zwei Keyframes – bitte etwas weiter fassen.');
+    }
+  }
+
   return {
     cuts,
-    parts,
+    parts: finalParts,
     warnings,
     maxDeltaSeconds: Math.round(maxDeltaSeconds * 1000) / 1000,
   };

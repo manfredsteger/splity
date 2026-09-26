@@ -73,3 +73,8 @@ Modus „An Szenen“: Splity erkennt Szenenwechsel (optional auch Schwarzbilder
 - Im Szenen-Modus „Als Kapitel speichern“: Kopie mit bildgenauen Sprungmarken (MP4/MOV/MKV), ohne Schnitt.
 - Reiter „Zusammenfügen“: Teile aus `Fertig/` oder beliebige Videos mit gleichen Codec-Parametern verlustfrei aneinanderhängen – mit Vorprüfung und Bit-Prüfung.
 - Vorschau-Player mit Sprung zu Teilen und Szenen.
+
+## Weitere Modi
+
+- **Max. Größe**: Teile mit maximaler Dateigröße (z. B. 2 GB für Upload-Grenzen), Schnitte an Keyframes.
+- **Ausschnitt**: nur einen Bereich behalten (Anfang/Ende, auch aus der Player-Position), Rest wird verworfen.
