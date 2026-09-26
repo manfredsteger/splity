@@ -151,11 +151,13 @@ export function executeMerge(
       // -auto_convert 0 ist Pflicht: Sonst schleust der concat-Demuxer SPS/PPS (h264_mp4toannexb
       // hin und zurück) in das erste Paket jeder Datei ein – semantisch harmlos, aber nicht mehr
       // bit-identisch zum Original (getestet: 12 von 3932 Paketen anders, mit der Option 0).
-      const args = ['-hide_banner', '-nostdin', '-y', '-progress', 'pipe:1', '-nostats', '-f', 'concat', '-safe', '0', '-auto_convert', '0', '-i', listPath];
+      // Die erste Datei zusätzlich als Eingang 1 nur für die Metadaten: Der concat-Demuxer selbst hat
+      // keine, ohne diesen Kniff verliert die Ausgabe alle globalen Tags (Aufnahmedatum, Gerät).
+      const args = ['-hide_banner', '-nostdin', '-y', '-progress', 'pipe:1', '-nostats', '-f', 'concat', '-safe', '0', '-auto_convert', '0', '-i', listPath, '-i', first.resolved.absPath];
       if (withData) args.push('-map', '0', '-ignore_unknown');
       else args.push('-map', '0:v', '-map', '0:a?', '-map', '0:s?', '-dn');
-      args.push('-map_metadata', '0', '-c', 'copy', '-avoid_negative_ts', 'make_zero');
-      if (targetExt === '.mp4' || targetExt === '.mov') args.push('-movflags', '+faststart', '-strict', 'experimental');
+      args.push('-map_metadata', '1', '-c', 'copy', '-avoid_negative_ts', 'make_zero');
+      if (targetExt === '.mp4' || targetExt === '.mov') args.push('-movflags', '+faststart+use_metadata_tags', '-strict', 'experimental');
       if (isHevc) args.push('-tag:v', 'hvc1');
       args.push(outPath);
       return args;

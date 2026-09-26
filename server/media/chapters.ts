@@ -125,7 +125,7 @@ export function exportChapters(
       if (withData) args.push('-map', '0', '-ignore_unknown');
       else args.push('-map', '0:v', '-map', '0:a?', '-map', '0:s?', '-dn');
       args.push('-map_metadata', '0', '-map_chapters', '1', '-c', 'copy');
-      if (targetExt === '.mp4' || targetExt === '.mov') args.push('-movflags', '+faststart', '-strict', 'experimental');
+      if (targetExt === '.mp4' || targetExt === '.mov') args.push('-movflags', '+faststart+use_metadata_tags', '-strict', 'experimental');
       if (isHevc) args.push('-tag:v', 'hvc1');
       args.push(outPath);
       return args;

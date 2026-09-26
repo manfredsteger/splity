@@ -207,7 +207,7 @@ export function remux(resolved: ResolvedVideo, probe: ProbeResult, target: Remux
         else args.push('-map', '0:d?', '-ignore_unknown');
       }
       args.push('-map_metadata', '0', '-c', 'copy');
-      if (target === 'mp4' || target === 'mov') args.push('-movflags', '+faststart', '-strict', 'experimental');
+      if (target === 'mp4' || target === 'mov') args.push('-movflags', '+faststart+use_metadata_tags', '-strict', 'experimental');
       if (isHevc && target !== 'mkv') args.push('-tag:v', 'hvc1');
       return args;
     },
@@ -234,7 +234,7 @@ export function extractAudio(resolved: ResolvedVideo, probe: ProbeResult, track:
     warnings: [],
     buildArgs: () => {
       const args = ['-vn', '-sn', '-dn', '-map', `0:a:${track}`, '-map_metadata', '0', '-c', 'copy'];
-      if (ext === '.m4a') args.push('-movflags', '+faststart');
+      if (ext === '.m4a') args.push('-movflags', '+faststart+use_metadata_tags');
       return args;
     },
   });

@@ -570,11 +570,11 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
       {/* Split Control & Mode Switcher */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-xs space-y-6">
         {/* Mode Selector Tabs */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-200 dark:border-zinc-800 pb-5">
-          <div className="flex items-center gap-2 p-1 bg-zinc-100 dark:bg-zinc-800/80 rounded-xl self-start">
+        <div className="flex flex-col gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-5">
+          <div className="flex flex-wrap items-center gap-1 p-1 bg-zinc-100 dark:bg-zinc-800/80 rounded-xl self-start">
             <button
               onClick={() => setModeType('count')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
+              className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all cursor-pointer ${
                 modeType === 'count'
                   ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -584,7 +584,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
             </button>
             <button
               onClick={() => setModeType('every')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
+              className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all cursor-pointer ${
                 modeType === 'every'
                   ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -594,7 +594,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
             </button>
             <button
               onClick={() => setModeType('size')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
+              className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all cursor-pointer ${
                 modeType === 'size'
                   ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -604,7 +604,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
             </button>
             <button
               onClick={() => setModeType('trim')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
+              className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all cursor-pointer ${
                 modeType === 'trim'
                   ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -614,7 +614,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
             </button>
             <button
               onClick={() => setModeType('scenes')}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
+              className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all cursor-pointer ${
                 modeType === 'scenes'
                   ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'

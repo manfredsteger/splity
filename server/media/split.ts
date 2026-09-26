@@ -236,7 +236,9 @@ export function executeSplit(
       if (targetExt === '.mp4' || targetExt === '.mov') {
         // strict=experimental: FLAC-Ton in MP4 verweigert der Muxer sonst komplett. Die Option
         // muss an den inneren MP4-Muxer gehen, ein globales -strict wirkt beim Segment-Muxer nicht.
-        args.push('-segment_format_options', 'movflags=+faststart:strict=experimental');
+        // use_metadata_tags: Sonst verlieren die Teile die Apple-Tags (Gerätemodell, Software,
+        // Aufnahmeort) – nur creation_time überlebt. Getestet mit einer iPhone-13-mini-Aufnahme.
+        args.push('-segment_format_options', 'movflags=+faststart+use_metadata_tags:strict=experimental');
       }
 
       if (isHevc) {
