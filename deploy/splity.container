@@ -1,0 +1,30 @@
+# Quadlet-Unit für Podman (z. B. Bazzite/Fedora Atomic) – nach ~/.config/containers/systemd/splity.container kopieren.
+# Danach: systemctl --user daemon-reload && systemctl --user start splity && loginctl enable-linger
+[Unit]
+Description=Splity – verlustfreier Video-Splitter
+After=network-online.target
+
+[Container]
+Image=localhost/splity:latest
+ContainerName=splity
+PublishPort=3006:3000
+Volume=%h/git/splity/data:/app/data
+Volume=%h/Videos/Splity:/app/splity
+Volume=%h/Videos:/app/library:ro
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=TZ=Europe/Berlin
+Environment=DATA_DIR=/app/data
+Environment=SPLITY_DIR=/app/splity
+Environment=LIBRARY_DIR=/app/library
+Environment=SPLITY_HOST_PATH=%h/Videos/Splity
+Environment=SPLITY_LIBRARY_HOST_PATH=%h/Videos
+# SELinux (Enforcing): kein Relabeln von ~/Videos, stattdessen Label-Trennung für diesen Container aus
+SecurityLabelDisable=true
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

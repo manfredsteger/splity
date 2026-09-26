@@ -79,3 +79,20 @@ Modus „An Szenen“: Splity erkennt Szenenwechsel (optional auch Schwarzbilder
 - **Max. Größe**: Teile mit maximaler Dateigröße (z. B. 2 GB für Upload-Grenzen), Schnitte an Keyframes.
 - **Ausschnitt**: nur einen Bereich behalten (Anfang/Ende, auch aus der Player-Position), Rest wird verworfen.
 - **Werkzeuge**: Container wechseln (z. B. MKV → MP4), Tonspur herausziehen, Schnittplan als LosslessCut-CSV.
+
+## Linux mit Podman (Bazzite, Fedora Atomic)
+
+Ohne Docker und Compose – Splity läuft als rootless Podman-Container über eine systemd-Quadlet-Unit:
+
+```bash
+git clone https://github.com/manfredsteger/splity.git ~/git/splity && cd ~/git/splity
+mkdir -p data ~/Videos/Splity/Eingang ~/Videos/Splity/Fertig
+podman build -t localhost/splity:latest .
+mkdir -p ~/.config/containers/systemd && cp deploy/splity.container ~/.config/containers/systemd/
+systemctl --user daemon-reload && systemctl --user start splity
+loginctl enable-linger      # startet den Dienst auch ohne Anmeldung nach dem Booten
+```
+
+Danach läuft Splity unter http://localhost:3006 (Eingang/Fertig in `~/Videos/Splity`, Bibliothek `~/Videos` nur lesend).
+Update: `cd ~/git/splity && git pull && podman build -t localhost/splity:latest . && systemctl --user restart splity`.
+Firewall: Bei firewalld ggf. `sudo firewall-cmd --add-port=3006/tcp --permanent && sudo firewall-cmd --reload`, falls der Port aus dem LAN nicht erreichbar ist.
