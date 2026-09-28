@@ -21,6 +21,7 @@ import { getCachedScenes, SENSITIVITY_THRESHOLDS } from '../media/scenes.js';
 import { getTargetExtension } from '../media/split.js';
 import { encodeVideoId, listVideos, resolveVideo } from '../sources.js';
 import { bestPreviewFile, cancelPreviewBuild, deletePreview, getPreviewEmitter, getPreviewStatus, startPreviewBuild } from '../media/preview.js';
+import { getFrame } from '../media/frames.js';
 import type { SceneParams, SegmentSpec, SplitMode } from '../types.js';
 
 export const videosRouter = Router();
@@ -374,6 +375,32 @@ videosRouter.get('/:id/events', async (req, res, next) => {
   }
 });
 
+// GET /api/videos/:id/frame?t=&exact=0|1&size=monitor|thumb - Einzelbild für den Monitor
+// exact=0: letzter Keyframe ≤ t (schnell, aus der Kopie) – zum Scrubben; exact=1: genau dieses Bild.
+// Antwort-Header X-Frame-Time / X-Frame-Exact sagen, was wirklich gezeigt wird.
+videosRouter.get('/:id/frame', async (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+    const t = parseFloat(String(req.query.t ?? '0'));
+    const exact = req.query.exact === '1' || req.query.exact === 'true';
+    const size = req.query.size === 'thumb' ? 'thumb' : 'monitor';
+    let closed = false;
+    req.on('close', () => (closed = true));
+    const frame = await getFrame(resolved, Number.isNaN(t) ? 0 : t, { exact, size, isCancelled: () => closed });
+    if (closed) return;
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('X-Frame-Time', frame.time.toFixed(2));
+    res.setHeader('X-Frame-Exact', frame.exact ? '1' : '0');
+    res.setHeader('X-Frame-Source', frame.source);
+    fs.createReadStream(frame.path).pipe(res);
+  } catch (err: any) {
+    if (err?.message === 'abgebrochen') return;
+    next(err);
+  }
+});
+
 // GET /api/videos/:id/thumb - Thumbnail image at time t (sequentially queued)
 videosRouter.get('/:id/thumb', async (req, res, next) => {
   try {
@@ -384,23 +411,13 @@ videosRouter.get('/:id/thumb', async (req, res, next) => {
 
     const t = req.query.t ? parseFloat(req.query.t as string) : 0;
     const time = Number.isNaN(t) ? 0 : t;
-    // Liegt die Zeit auf einem Keyframe (oder gibt es die vollständige Kopie), reicht die kleine
-    // Vorschau-Kopie als Quelle – beim 5K-HEVC dauert das 0,05 s statt 0,6 s. Nur Zeiten ZWISCHEN
-    // Keyframes (z. B. das letzte Bild eines Segments) brauchen das Original.
-    const best = bestPreviewFile(resolved.absPath);
-    let source: string | undefined;
-    if (best) {
-      if (best.kind === 'full') source = best.file;
-      else {
-        const cached = getCachedProbe(resolved);
-        if (cached && cached.keyframes.some((k) => Math.abs(k - time) < 0.02)) source = best.file;
-      }
-    }
-    const thumbPath = await generateThumbnail(resolved.absPath, time, source, source && best?.kind === 'keyframes' ? 0.05 : 0);
-
+    // Kartenbild: exakt bei t (Endbilder liegen zwischen Keyframes), an Keyframes aus der Kopie
+    let closed = false;
+    req.on('close', () => (closed = true));
+    const frame = await getFrame(resolved, time, { exact: true, size: 'thumb', isCancelled: () => closed });
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
-    fs.createReadStream(thumbPath).pipe(res);
+    fs.createReadStream(frame.path).pipe(res);
   } catch (err: any) {
     next(err);
   }

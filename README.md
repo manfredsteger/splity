@@ -78,7 +78,11 @@ Modus „An Szenen“: Splity erkennt Szenenwechsel (optional auch Schwarzbilder
 
 - **Max. Größe**: Teile mit maximaler Dateigröße (z. B. 2 GB für Upload-Grenzen), Schnitte an Keyframes.
 - **Ausschnitt**: nur einen Bereich behalten (Anfang/Ende, auch aus der Player-Position), Rest wird verworfen.
-- **Segmente**: mehrere Bereiche auf der Zeitleiste aufziehen (wie in LosslessCut), verschieben, an den Kanten ziehen –
+- **Vorschau-Monitor + Nadel**: In jedem Modus gibt es eine Zeitleiste mit ziehbarer Nadel (Lineal ziehen, Teil anklicken,
+  Tasten ←/→ = Keyframe, Shift+←/→ = ein Bild). Der Monitor zeigt das Bild an der Nadel als Server-Einzelbild – unabhängig vom
+  Browser-Codec: beim Ziehen sofort der letzte Keyframe (aus der Vorschau-Kopie), nach dem Loslassen das exakte Bild.
+  „Einrasten“ setzt die Nadel auf den nächsten Keyframe, „Abspielen“ öffnet zusätzlich das Videoelement.
+- **Segmente**: mehrere Bereiche auf der Zeitleiste aufziehen (wie in LosslessCut), verschieben, an den Kanten ziehen (der Monitor folgt der Kante) –
   alles rastet auf Keyframes. Jede Karte zeigt erstes und letztes Bild, Lücken landen im Papierkorb. Reihenfolge der
   Karten = Ausgabereihenfolge. Ausgabe wahlweise als eine zusammengefügte Datei (Schnitt + Verbinden + Bit-Prüfung in
   einem Durchgang) oder als einzelne Dateien. Tasten: `N` neues Segment, `I`/`O` Anfang/Ende = Player-Position, `Entf` löschen,

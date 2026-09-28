@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Clock, LogIn, LogOut, Play, Plus, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, LogIn, LogOut, Play, Plus, Trash2 } from 'lucide-react';
 import { formatTime, formatTimePrecise, parseTimeInput } from '../utils/format.js';
+import { Scrubber, type NeedlePhase, type ScrubberHandle } from './Scrubber.js';
 
 export interface EditorSegment {
   id: string;
@@ -84,12 +85,10 @@ interface SegmentEditorProps {
   onChange: (segments: EditorSegment[]) => void;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  playerTime: number;
-  onSeek?: (seconds: number) => void;
+  /** Nadel (Vorschau-Position) */
+  needle: number;
+  onNeedle: (seconds: number, phase: NeedlePhase) => void;
 }
-
-const ZOOM_STEPS = [1, 2, 4, 8, 16, 32];
-const RULER_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
 
 export const SegmentEditor: React.FC<SegmentEditorProps> = ({
   videoId,
@@ -100,16 +99,18 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
   onChange,
   selectedId,
   onSelect,
-  playerTime,
-  onSeek,
+  needle,
+  onNeedle,
 }) => {
   const points = useMemo(() => makeSnapPoints(duration, keyframes), [duration, keyframes]);
   const [zoom, setZoom] = useState(1);
   const [draft, setDraft] = useState<EditorSegment[] | null>(null);
   const [ghost, setGhost] = useState<{ start: number; end: number } | null>(null);
-  const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const dragRef = useRef<DragState | null>(null);
+  const scrubberRef = useRef<ScrubberHandle | null>(null);
+  const playerTime = needle;
+  const onSeek = useCallback((t: number) => onNeedle(t, 'end'), [onNeedle]);
   // Refs neben dem State: pointerup kann im selben Frame wie der letzte pointermove kommen,
   // dann wäre der State im Handler noch alt (schnelle Züge erzeugten sonst kein Segment).
   const ghostRef = useRef<{ start: number; end: number } | null>(null);
@@ -122,8 +123,6 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
     draftRef.current = d;
     setDraft(d);
   };
-  const barRef = useRef<HTMLDivElement | null>(null);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const working = draft ?? segments;
   const byTime = useMemo(() => [...working].sort((a, b) => a.start - b.start), [working]);
@@ -143,16 +142,14 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
 
   const pct = (t: number) => `${Math.min(100, Math.max(0, (t / duration) * 100))}%`;
 
-  const timeFromClientX = useCallback(
-    (clientX: number) => {
-      const el = barRef.current;
-      if (!el) return 0;
-      const rect = el.getBoundingClientRect();
-      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-      return ratio * duration;
-    },
-    [duration]
-  );
+  const timeFromClientX = useCallback((clientX: number) => scrubberRef.current?.timeFromClientX(clientX) ?? 0, []);
+  const capture = (e: React.PointerEvent) => {
+    try {
+      scrubberRef.current?.track?.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
 
   const update = useCallback(
     (next: EditorSegment[]) => {
@@ -269,7 +266,7 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
     if (e.button !== 0) return;
     const t = snapTime(points, timeFromClientX(e.clientX));
     dragRef.current = { kind: 'create', anchor: t, origStart: t, origEnd: t, startX: e.clientX, moved: false };
-    barRef.current?.setPointerCapture(e.pointerId);
+    capture(e);
   };
 
   const onSegmentPointerDown = (e: React.PointerEvent<HTMLDivElement>, seg: EditorSegment, kind: DragKind) => {
@@ -277,17 +274,18 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
     e.stopPropagation();
     const t = timeFromClientX(e.clientX);
     dragRef.current = { kind, id: seg.id, anchor: t, origStart: seg.start, origEnd: seg.end, startX: e.clientX, moved: false };
-    barRef.current?.setPointerCapture(e.pointerId);
+    capture(e);
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const t = timeFromClientX(e.clientX);
-    setHoverTime(t);
     const d = dragRef.current;
     if (!d) return;
     if (!d.moved && Math.abs(e.clientX - d.startX) < 3) return;
     d.moved = true;
     const snapped = snapTime(points, t);
+    // Die Nadel folgt der bewegten Kante – der Monitor zeigt live das Bild dort
+    onNeedle(snapped, 'drag');
     if (d.kind === 'create') {
       const start = Math.min(d.anchor, snapped);
       const end = Math.max(d.anchor, snapped);
@@ -314,7 +312,7 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
     const d = dragRef.current;
     dragRef.current = null;
     try {
-      barRef.current?.releasePointerCapture(e.pointerId);
+      scrubberRef.current?.track?.releasePointerCapture(e.pointerId);
     } catch {
       // ignore
     }
@@ -323,39 +321,24 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
       const g = ghostRef.current;
       if (d.moved && g && g.end > g.start) {
         addSegment(g.start, g.end);
+        onNeedle(g.start, 'end');
       } else if (!d.moved) {
-        // Klick in eine Lücke: nur hinspringen
-        onSeek?.(timeFromClientX(e.clientX));
+        // Klick in eine Lücke: Nadel dorthin
+        onNeedle(timeFromClientX(e.clientX), 'end');
       }
       setGhostBoth(null);
       return;
     }
     if (d.moved) {
       if (draftRef.current) update(draftRef.current);
+      onNeedle(snapTime(points, timeFromClientX(e.clientX)), 'end');
     } else if (d.id) {
       onSelect(d.id);
       const seg = segments.find((s) => s.id === d.id);
-      if (seg) onSeek?.(seg.start);
+      if (seg) onNeedle(seg.start, 'end');
     }
     setDraftBoth(null);
   };
-
-  // Ctrl/Cmd + Mausrad zoomt
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onWheel = (ev: WheelEvent) => {
-      if (!ev.ctrlKey && !ev.metaKey) return;
-      ev.preventDefault();
-      setZoom((z) => {
-        const idx = ZOOM_STEPS.indexOf(z);
-        const nextIdx = Math.min(ZOOM_STEPS.length - 1, Math.max(0, idx + (ev.deltaY < 0 ? 1 : -1)));
-        return ZOOM_STEPS[nextIdx];
-      });
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, []);
 
   // Tastatur: I/O = Anfang/Ende des gewählten Segments an die Player-Position, N = neues Segment, Entf = löschen
   useEffect(() => {
@@ -388,212 +371,135 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
     return () => clearTimeout(t);
   }, [confirmClear]);
 
-  // Lineal
-  const rulerStep = useMemo(() => {
-    const wanted = 8 * zoom;
-    return RULER_STEPS.find((st) => duration / st <= wanted) || RULER_STEPS[RULER_STEPS.length - 1];
-  }, [duration, zoom]);
-  const rulerMarks = useMemo(() => {
-    const out: number[] = [];
-    for (let t = 0; t < duration; t += rulerStep) out.push(t);
-    return out;
-  }, [duration, rulerStep]);
-
-  const sampledKeyframes = useMemo(() => {
-    const max = 3000;
-    if (keyframes.length <= max) return keyframes;
-    const step = Math.ceil(keyframes.length / max);
-    return keyframes.filter((_, i) => i % step === 0);
-  }, [keyframes]);
-
-  const zoomTo = (dir: -1 | 1) => {
-    const idx = ZOOM_STEPS.indexOf(zoom);
-    setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, idx + dir))]);
-  };
-
   const thumbUrl = (t: number) => `/api/videos/${encodeURIComponent(videoId)}/thumb?t=${Math.max(0, Math.round(t * 100) / 100)}`;
 
   return (
     <div className="space-y-4">
-      {/* Kopfzeile */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="text-xs text-zinc-600 dark:text-zinc-400">
-          <span className="font-semibold text-zinc-800 dark:text-zinc-200">{working.length} Segment{working.length === 1 ? '' : 'e'}</span>
-          {' · '}behalten <span className="font-mono">{formatTime(kept)}</span>
-          {' · '}verworfen <span className="font-mono">{formatTime(Math.max(0, duration - kept))}</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={addAtPlayer}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
-            title="Neues Segment an der Player-Position (Taste N)"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Neues Segment
-          </button>
-          <button
-            type="button"
-            onClick={sortByTime}
-            disabled={working.length < 2}
-            className="px-3 py-1.5 rounded-xl text-xs font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
-            title="Ausgabereihenfolge = zeitliche Reihenfolge"
-          >
-            Nach Zeit sortieren
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (confirmClear) {
-                update([]);
-                onSelect(null);
-                setConfirmClear(false);
-              } else setConfirmClear(true);
-            }}
-            disabled={working.length === 0}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-              confirmClear ? 'bg-red-600 text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
-            }`}
-          >
-            {confirmClear ? 'Wirklich alle löschen?' : 'Alle löschen'}
-          </button>
-          <div className="flex items-center gap-0.5 ml-1">
-            <button type="button" onClick={() => zoomTo(-1)} disabled={zoom === ZOOM_STEPS[0]} className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 flex items-center justify-center cursor-pointer" title="Herauszoomen (Strg + Mausrad)">
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-[11px] font-mono w-8 text-center text-zinc-500">{zoom}×</span>
-            <button type="button" onClick={() => zoomTo(1)} disabled={zoom === ZOOM_STEPS[ZOOM_STEPS.length - 1]} className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 flex items-center justify-center cursor-pointer" title="Hineinzoomen (Strg + Mausrad)">
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
+      {/* Werkzeugleiste */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={addAtPlayer}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
+          title="Neues Segment an der Nadel (Taste N)"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Neues Segment an der Nadel
+        </button>
+        <button
+          type="button"
+          onClick={sortByTime}
+          disabled={working.length < 2}
+          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+          title="Ausgabereihenfolge = zeitliche Reihenfolge"
+        >
+          Nach Zeit sortieren
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (confirmClear) {
+              update([]);
+              onSelect(null);
+              setConfirmClear(false);
+            } else setConfirmClear(true);
+          }}
+          disabled={working.length === 0}
+          className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+            confirmClear ? 'bg-red-600 text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+          }`}
+        >
+          {confirmClear ? 'Wirklich alle löschen?' : 'Alle löschen'}
+        </button>
       </div>
 
-      {/* Zeitleiste */}
-      <div ref={scrollRef} className={`w-full pb-1 select-none ${zoom > 1 ? 'overflow-x-auto' : 'overflow-x-hidden'}`}>
-        <div style={{ width: `${zoom * 100}%` }} className="min-w-full">
-          {/* Lineal (Marken nahe dem Ende weglassen, damit nichts über den Rand ragt) */}
-          <div className="relative h-4 text-[10px] font-mono text-zinc-400 overflow-hidden">
-            {rulerMarks
-              .filter((t) => t === 0 || (duration - t) / duration > 0.05 / zoom)
-              .map((t) => (
-                <span key={t} className={`absolute whitespace-nowrap ${t === 0 ? '' : '-translate-x-1/2'}`} style={{ left: pct(t) }}>
-                  {formatTime(t)}
-                </span>
-              ))}
-            <span className="absolute right-0 whitespace-nowrap">{formatTime(duration)}</span>
+      {/* Zeitleiste: Lineal = Nadel, Spur = Segmente aufziehen/verschieben */}
+      <Scrubber
+        ref={scrubberRef}
+        duration={duration}
+        keyframes={keyframes}
+        needle={needle}
+        onNeedle={onNeedle}
+        snapNeedle={false}
+        zoom={zoom}
+        onZoom={setZoom}
+        headerLeft={
+          <div className="text-xs text-zinc-600 dark:text-zinc-400 truncate">
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200">{working.length} Segment{working.length === 1 ? '' : 'e'}</span>
+            {' · '}behalten <span className="font-mono">{formatTime(kept)}</span>
+            {' · '}verworfen <span className="font-mono">{formatTime(Math.max(0, duration - kept))}</span>
           </div>
-
+        }
+        trackProps={{
+          onPointerDown: onBarPointerDown,
+          onPointerMove,
+          onPointerUp: endDrag,
+          onPointerCancel: endDrag,
+          title: 'Bereich aufziehen = neues Segment · Segment ziehen = verschieben · Kanten ziehen = Anfang/Ende ändern (Vorschau folgt)',
+        }}
+        trackClassName="cursor-crosshair rounded-b-lg"
+        trackStyle={{
+          backgroundImage: 'repeating-linear-gradient(135deg, rgba(120,120,130,0.18) 0px, rgba(120,120,130,0.18) 6px, transparent 6px, transparent 12px)',
+        }}
+        footer={
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-blue-600 inline-block" /> Segment (wird behalten)</span>
+            <span className="flex items-center gap-1.5"><Trash2 className="w-3 h-3" /> Lücke (wird verworfen)</span>
+            <span className="flex items-center gap-1.5"><span className="w-px h-3 bg-zinc-400 inline-block" /> Keyframe – Segmentgrenzen rasten darauf ein</span>
+            <span className="ml-auto">
+              Tasten: <kbd className="px-1 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">N</kbd> neu ·{' '}
+              <kbd className="px-1 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">I</kbd>/<kbd className="px-1 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">O</kbd> Anfang/Ende = Nadel ·{' '}
+              <kbd className="px-1 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">Entf</kbd> löschen
+            </span>
+          </div>
+        }
+      >
+        {/* Lücken (werden verworfen) */}
+        {gaps.map((g, i) => (
           <div
-            ref={barRef}
-            onPointerDown={onBarPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
-            onPointerLeave={() => setHoverTime(null)}
-            className="relative w-full h-16 rounded-xl overflow-hidden shadow-inner bg-zinc-200 dark:bg-zinc-800 cursor-crosshair touch-none"
-            style={{
-              backgroundImage:
-                'repeating-linear-gradient(135deg, rgba(120,120,130,0.18) 0px, rgba(120,120,130,0.18) 6px, transparent 6px, transparent 12px)',
-            }}
-            title="Bereich aufziehen = neues Segment · Segment ziehen = verschieben · Kanten ziehen = Anfang/Ende ändern"
+            key={`gap-${i}`}
+            className="absolute top-0 bottom-0 flex items-center justify-center text-zinc-500 pointer-events-none"
+            style={{ left: pct(g.start), width: `${((g.end - g.start) / duration) * 100}%` }}
+            title={`Wird verworfen: ${formatTime(g.start)} – ${formatTime(g.end)}`}
           >
-            {/* Lücken (werden verworfen) */}
-            {gaps.map((g, i) => (
-              <div
-                key={`gap-${i}`}
-                className="absolute top-0 bottom-0 flex items-center justify-center text-zinc-500 dark:text-zinc-500 pointer-events-none"
-                style={{ left: pct(g.start), width: `${((g.end - g.start) / duration) * 100}%` }}
-                title={`Wird verworfen: ${formatTime(g.start)} – ${formatTime(g.end)}`}
-              >
-                {((g.end - g.start) / duration) * 100 * zoom > 4 && <Trash2 className="w-4 h-4 opacity-60" />}
-              </div>
-            ))}
+            {((g.end - g.start) / duration) * 100 * zoom > 4 && <Trash2 className="w-4 h-4 opacity-60" />}
+          </div>
+        ))}
 
-            {/* Segmente */}
-            {working.map((seg) => {
-              const order = working.findIndex((s) => s.id === seg.id) + 1;
-              const isSel = seg.id === selectedId;
-              const widthPct = ((seg.end - seg.start) / duration) * 100;
-              return (
-                <div
-                  key={seg.id}
-                  onPointerDown={(e) => onSegmentPointerDown(e, seg, 'move')}
-                  className={`absolute top-1 bottom-1 rounded-lg cursor-grab active:cursor-grabbing flex flex-col justify-center px-2 overflow-hidden transition-shadow ${
-                    isSel ? 'bg-blue-500 ring-2 ring-white shadow-lg z-20' : 'bg-blue-600 hover:bg-blue-500 z-10'
-                  }`}
-                  style={{ left: pct(seg.start), width: `${widthPct}%` }}
-                  title={`Segment ${order}${seg.name ? ` „${seg.name}“` : ''}: ${formatTime(seg.start)} – ${formatTime(seg.end)} (${formatTime(seg.end - seg.start)})`}
-                >
-                  <div className="text-xs font-bold text-white truncate drop-shadow-xs">
-                    {widthPct * zoom > 3 ? `${order}${seg.name ? ` ${seg.name}` : ''}` : ''}
-                  </div>
-                  {widthPct * zoom > 8 && <div className="text-[10px] font-mono text-blue-100 truncate">{formatTime(seg.end - seg.start)}</div>}
-                  <div
-                    onPointerDown={(e) => onSegmentPointerDown(e, seg, 'resize-start')}
-                    className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/25 hover:bg-white/60"
-                    title="Anfang ziehen"
-                  />
-                  <div
-                    onPointerDown={(e) => onSegmentPointerDown(e, seg, 'resize-end')}
-                    className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/25 hover:bg-white/60"
-                    title="Ende ziehen"
-                  />
-                </div>
-              );
-            })}
-
-            {/* Aufzieh-Vorschau */}
-            {ghost && (
-              <div
-                className="absolute top-1 bottom-1 rounded-lg border-2 border-dashed border-blue-300 bg-blue-400/40 pointer-events-none z-30"
-                style={{ left: pct(ghost.start), width: `${((ghost.end - ghost.start) / duration) * 100}%` }}
-              />
-            )}
-
-            {/* Player-Position */}
-            <div className="absolute top-0 bottom-0 w-[2px] bg-red-500 pointer-events-none z-40 -translate-x-1/2" style={{ left: pct(playerTime) }}>
-              <div className="absolute -top-0 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-red-500" />
+        {/* Segmente */}
+        {working.map((seg) => {
+          const order = working.findIndex((s) => s.id === seg.id) + 1;
+          const isSel = seg.id === selectedId;
+          const widthPct = ((seg.end - seg.start) / duration) * 100;
+          return (
+            <div
+              key={seg.id}
+              onPointerDown={(e) => onSegmentPointerDown(e, seg, 'move')}
+              className={`absolute top-1 bottom-1 rounded-lg cursor-grab active:cursor-grabbing flex flex-col justify-center px-2 overflow-hidden transition-shadow ${
+                isSel ? 'bg-blue-500 ring-2 ring-white shadow-lg z-20' : 'bg-blue-600 hover:bg-blue-500 z-10'
+              }`}
+              style={{ left: pct(seg.start), width: `${widthPct}%` }}
+              title={`Segment ${order}${seg.name ? ` „${seg.name}“` : ''}: ${formatTime(seg.start)} – ${formatTime(seg.end)} (${formatTime(seg.end - seg.start)})`}
+            >
+              <div className="text-xs font-bold text-white truncate drop-shadow-xs">{widthPct * zoom > 3 ? `${order}${seg.name ? ` ${seg.name}` : ''}` : ''}</div>
+              {widthPct * zoom > 8 && <div className="text-[10px] font-mono text-blue-100 truncate">{formatTime(seg.end - seg.start)}</div>}
+              <div onPointerDown={(e) => onSegmentPointerDown(e, seg, 'resize-start')} className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/25 hover:bg-white/60" title="Anfang ziehen (Vorschau folgt)" />
+              <div onPointerDown={(e) => onSegmentPointerDown(e, seg, 'resize-end')} className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize bg-white/25 hover:bg-white/60" title="Ende ziehen (Vorschau folgt)" />
             </div>
+          );
+        })}
 
-            {/* Cursor-Zeit als schwebendes Label – bewusst INNERHALB der Leiste, damit sich das Layout beim
-                Bewegen nicht verändert (ein Umbruch in der Kopfzeile ließ die Leiste unter der Maus springen) */}
-            {hoverTime !== null && !dragRef.current && (
-              <div
-                className="absolute bottom-1 -translate-x-1/2 px-1.5 py-0.5 rounded bg-zinc-900/85 text-white text-[10px] font-mono pointer-events-none z-50 whitespace-nowrap flex items-center gap-1"
-                style={{ left: pct(Math.min(duration * (1 - 40 / Math.max(400, (barRef.current?.clientWidth || 800))), Math.max(duration * (40 / Math.max(400, (barRef.current?.clientWidth || 800))), hoverTime))) }}
-              >
-                <Clock className="w-2.5 h-2.5" />
-                {formatTimePrecise(snapTime(points, hoverTime))}
-              </div>
-            )}
-          </div>
-
-          {/* Keyframes */}
-          <div className="relative w-full h-2 mt-1 overflow-hidden">
-            {sampledKeyframes.map((kf, i) => (
-              <div key={i} className="absolute top-0 w-px h-2 bg-zinc-400 dark:bg-zinc-600 opacity-60" style={{ left: pct(kf) }} />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-blue-600 inline-block" /> Segment (wird behalten)</span>
-        <span className="flex items-center gap-1.5"><Trash2 className="w-3 h-3" /> Lücke (wird verworfen)</span>
-        <span className="flex items-center gap-1.5"><span className="w-px h-3 bg-zinc-400 inline-block" /> Keyframe – alle Grenzen rasten darauf ein</span>
-        <span className="ml-auto">
-          Tasten: <kbd className="px-1 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">N</kbd> neu ·{' '}
-          <kbd className="px-1 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">I</kbd>/<kbd className="px-1 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">O</kbd> Anfang/Ende = Player ·{' '}
-          <kbd className="px-1 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">Entf</kbd> löschen
-        </span>
-      </div>
+        {/* Aufzieh-Vorschau */}
+        {ghost && (
+          <div className="absolute top-1 bottom-1 rounded-lg border-2 border-dashed border-blue-300 bg-blue-400/40 pointer-events-none z-30" style={{ left: pct(ghost.start), width: `${((ghost.end - ghost.start) / duration) * 100}%` }} />
+        )}
+      </Scrubber>
 
       {/* Karten in Ausgabereihenfolge */}
       {working.length === 0 ? (
         <div className="text-sm text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800/50 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700/60">
-          Ziehe auf der Leiste einen Bereich auf oder klicke „Neues Segment“. Jedes Segment zeigt sein erstes und letztes Bild; alles außerhalb landet
-          im Papierkorb. Am Ende werden alle Segmente verlustfrei geschnitten und – wenn gewünscht – in dieser Reihenfolge zu einer Datei zusammengefügt.
+          Ziehe auf der Spur einen Bereich auf oder klicke „Neues Segment an der Nadel“. Beim Ziehen zeigt der Monitor oben das Bild an der
+          bewegten Kante. Jedes Segment zeigt sein erstes und letztes Bild; alles außerhalb landet im Papierkorb. Am Ende werden alle Segmente verlustfrei geschnitten und – wenn gewünscht – in dieser Reihenfolge zu einer Datei zusammengefügt.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -650,13 +556,13 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
                           <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] font-semibold">
                             {which === 'start' ? 'Anfang' : 'Ende'}
                           </span>
-                          {onSeek && (
+                          {(
                             <span
                               role="button"
-                              title={which === 'start' ? 'Im Player zum Anfang springen' : 'Im Player kurz vor das Ende springen'}
+                              title={which === 'start' ? 'Nadel an den Anfang (Vorschau zeigt das erste Bild)' : 'Nadel auf das letzte Bild'}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                onSeek(which === 'start' ? seg.start : Math.max(seg.start, seg.end - 2));
+                                onSeek(which === 'start' ? seg.start : Math.max(seg.start, seg.end - frame));
                               }}
                               className="absolute bottom-1 right-1 w-6 h-6 rounded-md bg-white/85 dark:bg-zinc-900/85 text-zinc-800 dark:text-zinc-100 flex items-center justify-center hover:bg-blue-600 hover:text-white transition-colors"
                             >
@@ -686,8 +592,7 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); setFromPlayer(seg.id, which); }}
-                            disabled={!onSeek}
-                            title={`${which === 'start' ? 'Anfang' : 'Ende'} = Player-Position (${formatTime(playerTime)}), Taste ${which === 'start' ? 'I' : 'O'}`}
+                            title={`${which === 'start' ? 'Anfang' : 'Ende'} = Nadel (${formatTimePrecise(playerTime)}), Taste ${which === 'start' ? 'I' : 'O'}`}
                             className="w-6 h-6 rounded-md bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 flex items-center justify-center cursor-pointer disabled:cursor-not-allowed shrink-0"
                           >
                             {which === 'start' ? <LogIn className="w-3.5 h-3.5" /> : <LogOut className="w-3.5 h-3.5" />}

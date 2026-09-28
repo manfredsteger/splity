@@ -5,6 +5,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { PREVIEW_DIR } from '../config.js';
 import { getFileCacheKey } from './probe.js';
+import { pregenerateKeyframeFrames } from './frames.js';
 import type { PreviewKind, PreviewStatus, ProbeResult, ResolvedVideo } from '../types.js';
 
 /**
@@ -176,6 +177,9 @@ export function startPreviewBuild(resolved: ResolvedVideo, probe: ProbeResult, k
     try {
       fs.renameSync(tmp, file);
       finish();
+      if (kind === 'keyframes') {
+        pregenerateKeyframeFrames(resolved, file).catch(() => undefined);
+      }
     } catch (err: any) {
       finish(`Vorschau-Kopie konnte nicht gespeichert werden: ${err.message}`);
     }

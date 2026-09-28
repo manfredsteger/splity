@@ -24,9 +24,10 @@ import {
 } from 'lucide-react';
 import { SceneStrip } from './SceneStrip.js';
 import { SegmentEditor, type EditorSegment } from './SegmentEditor.js';
-import { VideoPlayer, type VideoPlayerHandle } from './VideoPlayer.js';
-import { Timeline, type TimelineMarker } from './Timeline.js';
-import { formatBytes, formatTime, parseTimeInput } from '../utils/format.js';
+import { PreviewMonitor } from './PreviewMonitor.js';
+import { Scrubber, type NeedlePhase } from './Scrubber.js';
+import { PartsLegend, PartsTrack, type TimelineMarker } from './Timeline.js';
+import { formatBytes, formatTime, formatTimePrecise, parseTimeInput } from '../utils/format.js';
 import type { Job, ProbeResult, SceneDetectionResult, SceneSensitivity, SplitMode, SplitPlan } from '../types.js';
 
 type ModeType = 'count' | 'every' | 'size' | 'trim' | 'segments' | 'scenes';
@@ -80,7 +81,14 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   const [maxSizeMb, setMaxSizeMb] = useState<number>(2000);
   const [trimStartText, setTrimStartText] = useState<string>('00:00:00');
   const [trimEndText, setTrimEndText] = useState<string>('');
-  const [playerTime, setPlayerTime] = useState<number>(0);
+  // Nadel = Vorschau-Position; needleLive = wird gerade gezogen / Video läuft
+  const [needle, setNeedle] = useState<number>(0);
+  const [needleLive, setNeedleLive] = useState(false);
+  const onNeedle = useCallback((t: number, phase: NeedlePhase) => {
+    setNeedle(t);
+    setNeedleLive(phase === 'drag');
+  }, []);
+  const playerTime = needle;
   const [plan, setPlan] = useState<SplitPlan | null>(null);
   const [hoveredPartIndex, setHoveredPartIndex] = useState<number | null>(null);
   const [, startTransition] = useTransition();
@@ -106,10 +114,13 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   const [minSceneSeconds, setMinSceneSeconds] = useState<number>(10);
   const sceneEsRef = useRef<EventSource | null>(null);
 
-  // Vorschau-Player
-  const playerRef = useRef<VideoPlayerHandle | null>(null);
+  // Vorschau-Monitor
   const [showPlayer, setShowPlayer] = useState(true);
-  const seek = useCallback((seconds: number) => playerRef.current?.seek(seconds, true), []);
+  const seek = useCallback((seconds: number) => onNeedle(seconds, 'end'), [onNeedle]);
+  useEffect(() => {
+    setNeedle(0);
+    setNeedleLive(false);
+  }, [videoId]);
   const chaptersPossible = ['MP4', 'MOV', 'MKV', 'M4V'].includes((probe.container || '').toUpperCase());
 
   // Werkzeuge: Container wechseln, Tonspur herausziehen, LosslessCut-CSV
@@ -483,7 +494,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
       {/* Vorschau-Player */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-xs space-y-3">
         <div className="flex items-center justify-between">
-          <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">Vorschau</div>
+          <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">Vorschau · Bild an der Nadel</div>
           <button
             type="button"
             onClick={() => setShowPlayer((v) => !v)}
@@ -494,7 +505,18 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
           </button>
         </div>
         {showPlayer && (
-          <VideoPlayer ref={playerRef} videoId={videoId} container={probe.container} codec={probe.video?.codec} keyframeIntervalAvg={probe.keyframeIntervalAvg} keyframes={probe.keyframes} onTimeUpdate={setPlayerTime} />
+          <PreviewMonitor
+            videoId={videoId}
+            duration={probe.duration}
+            fps={probe.video?.fps || 25}
+            keyframes={probe.keyframes}
+            container={probe.container}
+            codec={probe.video?.codec}
+            keyframeIntervalAvg={probe.keyframeIntervalAvg}
+            needle={needle}
+            needleLive={needleLive}
+            onNeedle={onNeedle}
+          />
         )}
       </div>
 
@@ -764,7 +786,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                   keyframes={probe.keyframes}
                   activeBoundaries={activeBoundaries}
                   onToggle={toggleBoundary}
-                  onSeek={showPlayer ? seek : undefined}
+                  onSeek={seek}
                 />
 
                 <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400">
@@ -802,8 +824,8 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
               onChange={setSegments}
               selectedId={selectedSegmentId}
               onSelect={setSelectedSegmentId}
-              playerTime={playerTime}
-              onSeek={showPlayer ? seek : undefined}
+              needle={needle}
+              onNeedle={onNeedle}
             />
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800">
               <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">Ausgabe:</span>
@@ -900,12 +922,11 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                       />
                       <button
                         type="button"
-                        onClick={() => setValue(formatTime(Math.floor(playerTime)))}
-                        disabled={!showPlayer}
-                        title="Aktuelle Position im Player übernehmen"
-                        className="shrink-0 px-3 py-2 rounded-xl text-xs font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                        onClick={() => setValue(formatTimePrecise(playerTime))}
+                        title="Nadel-Position übernehmen (landet beim Schnitt auf dem nächsten Keyframe)"
+                        className="shrink-0 px-3 py-2 rounded-xl text-xs font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer"
                       >
-                        = Player ({formatTime(playerTime)})
+                        = Nadel ({formatTimePrecise(playerTime)})
                       </button>
                     </div>
                   </div>
@@ -992,19 +1013,29 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
 
         )}
 
-        {/* Timeline Visualization */}
+        {/* Zeitleiste mit Nadel (alle Modi außer Segmente, die haben ihre eigene Spur) */}
         {plan && modeType !== 'segments' && (
           <div className="pt-2">
-            <Timeline
+            <Scrubber
               duration={probe.duration}
-              parts={plan.parts}
-              cuts={plan.cuts}
               keyframes={probe.keyframes}
-              markers={modeType === 'scenes' ? sceneMarkers : undefined}
-              onSeek={showPlayer ? seek : undefined}
-              activePartIndex={hoveredPartIndex ?? undefined}
-              onHoverPart={setHoveredPartIndex}
-            />
+              needle={needle}
+              onNeedle={onNeedle}
+              trackScrub
+              headerLeft={<div className="text-xs text-zinc-500 dark:text-zinc-400">Zeitleiste · Nadel bei <span className="font-mono text-zinc-800 dark:text-zinc-200">{formatTimePrecise(needle)}</span></div>}
+              trackClassName="rounded-b-lg cursor-ew-resize"
+              footer={<PartsLegend partsCount={plan.parts.length} keyframesCount={probe.keyframes.length} markers={modeType === 'scenes' ? sceneMarkers : undefined} />}
+            >
+              <PartsTrack
+                duration={probe.duration}
+                parts={plan.parts}
+                cuts={plan.cuts}
+                markers={modeType === 'scenes' ? sceneMarkers : undefined}
+                activePartIndex={hoveredPartIndex ?? undefined}
+                onHoverPart={setHoveredPartIndex}
+                onPartClick={(p) => seek(p.start)}
+              />
+            </Scrubber>
           </div>
         )}
 
@@ -1045,9 +1076,9 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                     key={p.index}
                     onMouseEnter={() => setHoveredPartIndex(p.index)}
                     onMouseLeave={() => setHoveredPartIndex(null)}
-                    onClick={() => showPlayer && seek(p.start)}
-                    title={showPlayer ? `Zu ${formatTime(p.start)} springen` : undefined}
-                    className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all ${showPlayer ? 'cursor-pointer' : ''} ${
+                    onClick={() => seek(p.start)}
+                    title={`Nadel auf ${formatTime(p.start)} setzen`}
+                    className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer ${
                       p.keep === false
                         ? 'border-dashed border-zinc-300 dark:border-zinc-700 opacity-50'
                         : isHovered
