@@ -144,3 +144,57 @@ describe('planSplit', () => {
     expect(plan2.parts.map((p) => p.keep)).toEqual([false, true]);
   });
 });
+
+describe('planSplit – Segmente', () => {
+  const keyframes = Array.from({ length: 31 }, (_, i) => i * 2); // 0..60 alle 2 s
+
+  it('zwei Segmente, Lücken werden verworfen, Reihenfolge bleibt', () => {
+    const plan = planSplit(60, keyframes, {
+      type: 'segments',
+      join: true,
+      segments: [
+        { start: 40, end: 50, name: 'Zweites' },
+        { start: 10, end: 20 },
+      ],
+    });
+    expect(plan.cuts.map((c) => c.actualTime)).toEqual([10, 20, 40, 50]);
+    expect(plan.parts.map((p) => [p.start, p.end, p.keep, p.segment ?? null])).toEqual([
+      [0, 10, false, null],
+      [10, 20, true, 2],
+      [20, 40, false, null],
+      [40, 50, true, 1],
+      [50, 60, false, null],
+    ]);
+    expect(plan.parts[3].name).toBe('Zweites');
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('Grenzen landen auf Keyframes, Anfang/Ende des Videos gelten als Keyframe', () => {
+    const plan = planSplit(60, keyframes, { type: 'segments', join: false, segments: [{ start: 0, end: 11.2 }, { start: 52.9, end: 60 }] });
+    expect(plan.cuts.map((c) => c.actualTime)).toEqual([12, 52]);
+    expect(plan.parts.filter((p) => p.keep).map((p) => [p.start, p.end])).toEqual([
+      [0, 12],
+      [52, 60],
+    ]);
+  });
+
+  it('Segment zwischen zwei Keyframes fällt mit Warnung weg', () => {
+    const plan = planSplit(60, keyframes, { type: 'segments', join: false, segments: [{ start: 10.2, end: 10.8 }, { start: 30, end: 40 }] });
+    expect(plan.warnings.some((w) => w.includes('Segment 1'))).toBe(true);
+    expect(plan.parts.filter((p) => p.keep).map((p) => [p.start, p.end, p.segment])).toEqual([[30, 40, 2]]);
+  });
+
+  it('ein Segment über das ganze Video: nichts zu schneiden, aber behalten', () => {
+    const plan = planSplit(60, keyframes, { type: 'segments', join: false, segments: [{ start: 0, end: 60 }] });
+    expect(plan.cuts).toEqual([]);
+    expect(plan.parts).toHaveLength(1);
+    expect(plan.parts[0].keep).toBe(true);
+    expect(plan.parts[0].segment).toBe(1);
+  });
+
+  it('ohne Segmente: alles verworfen + Warnung', () => {
+    const plan = planSplit(60, keyframes, { type: 'segments', join: true, segments: [] });
+    expect(plan.parts.every((p) => p.keep === false)).toBe(true);
+    expect(plan.warnings[0]).toContain('Kein Segment');
+  });
+});

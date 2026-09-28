@@ -14,6 +14,7 @@ export const CuttingProgress: React.FC<CuttingProgressProps> = ({
   isCancelling,
 }) => {
   const isVerifying = job.phase === 'verify';
+  const isJoining = job.type !== 'merge' && job.phase === 'merge';
 
   return (
     <div className="max-w-2xl mx-auto my-12 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-8 shadow-lg text-center space-y-6 animate-in fade-in zoom-in-95 duration-200">
@@ -30,6 +31,8 @@ export const CuttingProgress: React.FC<CuttingProgressProps> = ({
         <h3 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
           {isVerifying
             ? 'Prüfe Ausgabe gegen das Original …'
+            : isJoining
+            ? 'Segmente werden verlustfrei zusammengefügt'
             : job.type === 'chapters'
             ? 'Kapitel werden geschrieben'
             : job.type === 'merge'
@@ -51,7 +54,7 @@ export const CuttingProgress: React.FC<CuttingProgressProps> = ({
           <span>
             {isVerifying
               ? 'Bitgenaue Paket-Prüfung'
-              : job.type === 'chapters' || job.type === 'merge' || job.type === 'remux' || job.type === 'audio'
+              : isJoining || job.type === 'chapters' || job.type === 'merge' || job.type === 'remux' || job.type === 'audio'
               ? 'Kopiere Pakete …'
               : job.currentPart > 0 && job.totalParts > 0
               ? `Teil ${job.currentPart} von ${job.totalParts}`

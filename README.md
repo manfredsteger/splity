@@ -78,6 +78,13 @@ Modus „An Szenen“: Splity erkennt Szenenwechsel (optional auch Schwarzbilder
 
 - **Max. Größe**: Teile mit maximaler Dateigröße (z. B. 2 GB für Upload-Grenzen), Schnitte an Keyframes.
 - **Ausschnitt**: nur einen Bereich behalten (Anfang/Ende, auch aus der Player-Position), Rest wird verworfen.
+- **Segmente**: mehrere Bereiche auf der Zeitleiste aufziehen (wie in LosslessCut), verschieben, an den Kanten ziehen –
+  alles rastet auf Keyframes. Jede Karte zeigt erstes und letztes Bild, Lücken landen im Papierkorb. Reihenfolge der
+  Karten = Ausgabereihenfolge. Ausgabe wahlweise als eine zusammengefügte Datei (Schnitt + Verbinden + Bit-Prüfung in
+  einem Durchgang) oder als einzelne Dateien. Tasten: `N` neues Segment, `I`/`O` Anfang/Ende = Player-Position, `Entf` löschen,
+  Strg + Mausrad zoomt.
+- **Vorschau-Kopie**: Kann der Browser das Original nicht abspielen (HEVC, MKV, 4K/5K …), erzeugt Splity auf Knopfdruck eine
+  kleine H.264-Kopie (max. 854 px) nur für die Vorschau. Sie liegt in `data/cache/preview/`, geschnitten wird immer das Original.
 - **Werkzeuge**: Container wechseln (z. B. MKV → MP4), Tonspur herausziehen, Schnittplan als LosslessCut-CSV.
 
 ## Linux mit Podman (Bazzite, Fedora Atomic)

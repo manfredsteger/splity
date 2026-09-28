@@ -47,6 +47,12 @@ export interface ResolvedVideo {
   deletable: boolean;
 }
 
+export interface SegmentSpec {
+  start: number;
+  end: number;
+  name?: string;
+}
+
 export type SplitMode =
   | { type: 'count'; n: number }
   | { type: 'every'; seconds: number }
@@ -54,6 +60,8 @@ export type SplitMode =
   | { type: 'size'; maxBytes: number }
   /** Nur einen Bereich behalten (Sekunden), Grenzen landen auf Keyframes */
   | { type: 'trim'; start: number; end: number }
+  /** Mehrere Bereiche behalten (Reihenfolge = Ausgabereihenfolge); join = zu einer Datei zusammenfügen */
+  | { type: 'segments'; segments: SegmentSpec[]; join: boolean }
   | {
       type: 'points';
       times: number[];
@@ -107,6 +115,10 @@ export interface Part {
   bytes?: number;
   /** false = Teil wird nach dem Schnitt verworfen (Trimmen) */
   keep?: boolean;
+  /** Segment-Modus: 1-basierte Nummer des Segments in Ausgabereihenfolge */
+  segment?: number;
+  /** Segment-Modus: vom Nutzer vergebener Name */
+  name?: string;
 }
 
 export interface SplitPlan {
@@ -186,6 +198,15 @@ export interface Job {
   durationSeconds?: number;
   result?: SplitResult;
   error?: string;
+}
+
+/** Vorschau-Kopie (kleine H.264-Datei für Browser, die den Codec nicht können) */
+export interface PreviewStatus {
+  available: boolean;
+  building: boolean;
+  percent: number;
+  error?: string;
+  size?: number;
 }
 
 export interface AppSettings {

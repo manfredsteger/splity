@@ -5,8 +5,11 @@ import type { StreamVerification, VerificationResult } from '../types.js';
 export interface VerifyOptions {
   onProgress?: (packetsProcessed: number, estimatedTotalPackets?: number) => void;
   isCancelled?: () => boolean;
-  /** 'subsequence': Ausgabe muss ein zusammenhängender Ausschnitt des Originals sein (Trimmen) */
-  mode?: 'exact' | 'subsequence';
+  /**
+   * 'subsequence': Ausgabe muss ein zusammenhängender Ausschnitt des Originals sein (Trimmen).
+   * 'segments': JEDE Ausgabedatei für sich muss ein zusammenhängender Ausschnitt sein (Segment-Modus).
+   */
+  mode?: 'exact' | 'subsequence' | 'segments';
   /** Stream-Auswahl (ffmpeg -map) für Eingaben bzw. Ausgaben, z. B. nur eine Tonspur */
   inputMap?: string[];
   outputMap?: string[];
@@ -158,14 +161,16 @@ export async function verifySequence(
 
   const estimatedTotal = totalPacketsProcessed * 2;
 
-  // 2. Process outputs in order
+  // 2. Process outputs in order (Segment-Modus: jede Ausgabe in einen eigenen Sammler)
+  const perOutput: StreamPacketsCollector[] = [];
   for (const outputPath of outputs) {
     if (options?.isCancelled && options.isCancelled()) {
       throw new Error('Verifizierung abgebrochen');
     }
+    const target: StreamPacketsCollector = options?.mode === 'segments' ? { kinds: new Map(), streams: new Map() } : outputCollector;
     await extractFramemd5(
       outputPath,
-      outputCollector,
+      target,
       () => {
         totalPacketsProcessed++;
         if (options?.onProgress) {
@@ -175,6 +180,21 @@ export async function verifySequence(
       options?.isCancelled,
       options?.outputMap
     );
+    if (options?.mode === 'segments') {
+      perOutput.push(target);
+      // Für die Übersicht (Paketzahlen) alles zusätzlich zusammenführen
+      for (const [idx, list] of target.streams) {
+        const merged = outputCollector.streams.get(idx) || [];
+        merged.push(...list);
+        outputCollector.streams.set(idx, merged);
+        const kind = target.kinds.get(idx);
+        if (kind && !outputCollector.kinds.has(idx)) outputCollector.kinds.set(idx, kind);
+      }
+    }
+  }
+
+  if (options?.mode === 'segments') {
+    return compareSegments(inputCollector, outputCollector, perOutput, startTime);
   }
 
   // 3. Compare stream by stream
@@ -253,6 +273,60 @@ export async function verifySequence(
     durationMs,
     errorMessage: firstErrorMessage,
   };
+}
+
+/** Liegt `needle` als zusammenhängende Folge in `hay`? */
+function isContiguousSubsequence(hay: string[], needle: string[]): boolean {
+  if (needle.length === 0) return true;
+  for (let start = 0; start + needle.length <= hay.length; start++) {
+    if (hay[start] !== needle[0]) continue;
+    let ok = true;
+    for (let j = 1; j < needle.length; j++) {
+      if (hay[start + j] !== needle[j]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+
+/** Segment-Modus: jede Ausgabedatei muss je Stream ein zusammenhängender Ausschnitt des Originals sein. */
+function compareSegments(
+  input: StreamPacketsCollector,
+  combined: StreamPacketsCollector,
+  perOutput: StreamPacketsCollector[],
+  startTime: number
+): VerificationResult {
+  const allStreamIndices = Array.from(new Set([...input.streams.keys(), ...combined.streams.keys()])).sort((a, b) => a - b);
+  const streams: StreamVerification[] = [];
+  let ok = true;
+  let errorMessage: string | undefined;
+  for (const streamIdx of allStreamIndices) {
+    const kind = input.kinds.get(streamIdx) || combined.kinds.get(streamIdx) || (streamIdx === 0 ? 'video' : 'audio');
+    const inPackets = input.streams.get(streamIdx) || [];
+    let mismatchAt: number | undefined;
+    perOutput.forEach((out, i) => {
+      if (mismatchAt !== undefined) return;
+      const outPackets = out.streams.get(streamIdx) || [];
+      if (!isContiguousSubsequence(inPackets, outPackets)) mismatchAt = i + 1;
+    });
+    if (mismatchAt !== undefined) {
+      ok = false;
+      if (!errorMessage) {
+        errorMessage = `Segment ${mismatchAt}: ${kind === 'video' ? 'Videospur' : 'Audiospur'} ${streamIdx} ist keine zusammenhängende Folge des Originals (${inPackets.length} Pakete).`;
+      }
+    }
+    streams.push({
+      kind,
+      index: streamIdx,
+      packetsOriginal: inPackets.length,
+      packetsParts: (combined.streams.get(streamIdx) || []).length,
+      firstMismatchAt: mismatchAt,
+    });
+  }
+  return { ok, streams, durationMs: Date.now() - startTime, errorMessage };
 }
 
 /**

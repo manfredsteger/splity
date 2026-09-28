@@ -89,6 +89,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               ? `Max. ${Math.round(job.mode.maxBytes / 1048576)} MB je Teil (${job.totalParts} Teile)`
               : job.mode.type === 'trim'
               ? `Ausschnitt ${formatTime(job.mode.start)} – ${formatTime(job.mode.end)}`
+              : job.mode.type === 'segments'
+              ? `${job.mode.segments.length} Segment${job.mode.segments.length === 1 ? '' : 'e'}${job.mode.join ? ' → eine Datei' : ' als einzelne Dateien'}`
               : job.mode.origin === 'scenes'
               ? `Szenen (${job.mode.times.length + 1} Teile)`
               : `${job.mode.times.length + 1} Teile (Marker)`;

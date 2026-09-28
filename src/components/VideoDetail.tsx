@@ -13,6 +13,7 @@ import {
   FileAudio,
   Package,
   EyeOff,
+  Layers,
   Loader2,
   Minus,
   Plus,
@@ -22,24 +23,17 @@ import {
   Wand2,
 } from 'lucide-react';
 import { SceneStrip } from './SceneStrip.js';
+import { SegmentEditor, type EditorSegment } from './SegmentEditor.js';
 import { VideoPlayer, type VideoPlayerHandle } from './VideoPlayer.js';
 import { Timeline, type TimelineMarker } from './Timeline.js';
-import { formatBytes, formatTime } from '../utils/format.js';
+import { formatBytes, formatTime, parseTimeInput } from '../utils/format.js';
 import type { Job, ProbeResult, SceneDetectionResult, SceneSensitivity, SplitMode, SplitPlan } from '../types.js';
 
-type ModeType = 'count' | 'every' | 'size' | 'trim' | 'scenes';
+type ModeType = 'count' | 'every' | 'size' | 'trim' | 'segments' | 'scenes';
 
 const MB = 1024 * 1024;
 
-/** "hh:mm:ss", "mm:ss" oder Sekunden -> Sekunden (NaN bei Unsinn) */
-export function parseTimeInput(text: string): number {
-  const t = text.trim().replace(',', '.');
-  if (!t) return NaN;
-  if (/^\d+(\.\d+)?$/.test(t)) return parseFloat(t);
-  const parts = t.split(':').map((x) => parseFloat(x));
-  if (parts.some((x) => Number.isNaN(x))) return NaN;
-  return parts.reduce((acc, x) => acc * 60 + x, 0);
-}
+export { parseTimeInput };
 
 const SENSITIVITY_LABELS: Record<SceneSensitivity, { label: string; hint: string }> = {
   low: { label: 'Niedrig', hint: 'nur harte Schnitte' },
@@ -91,6 +85,16 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   const [hoveredPartIndex, setHoveredPartIndex] = useState<number | null>(null);
   const [, startTransition] = useTransition();
 
+  // Segment-Modus (mehrere Bereiche, Reihenfolge = Ausgabereihenfolge)
+  const [segments, setSegments] = useState<EditorSegment[]>([]);
+  const [segmentsJoin, setSegmentsJoin] = useState(true);
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
+  useEffect(() => {
+    setSegments([]);
+    setSelectedSegmentId(null);
+  }, [videoId]);
+  const segmentsKey = segments.map((sg) => `${sg.start}-${sg.end}-${sg.name}`).join('|');
+
   // Szenen-Modus
   const [sensitivity, setSensitivity] = useState<SceneSensitivity>('mid');
   const [useBlack, setUseBlack] = useState(false);
@@ -138,9 +142,12 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
   const downloadLosslessCutCsv = useCallback(() => {
     if (!plan) return;
     const base = probe.filename.replace(/\.[^.]+$/, '');
-    const rows = plan.parts
+    const keptSorted = plan.parts
       .filter((p) => p.keep !== false)
-      .map((p, i) => `${p.start.toFixed(3)},${p.end.toFixed(3)},${JSON.stringify(`${base} - Teil ${i + 1}`)}`);
+      .sort((a, b) => (a.segment ?? 0) - (b.segment ?? 0) || a.start - b.start);
+    const rows = keptSorted.map((p, i) =>
+      `${p.start.toFixed(3)},${p.end.toFixed(3)},${JSON.stringify(p.name ? p.name : p.segment ? `${base} - Segment ${p.segment}` : `${base} - Teil ${i + 1}`)}`
+    );
     const blob = new Blob([rows.join('\n') + '\n'], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -295,7 +302,17 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
       ? { type: 'size', maxBytes: Math.max(1, Math.round(maxSizeMb)) * MB }
       : modeType === 'trim'
       ? { type: 'trim', start: trimValid ? trimStart : 0, end: trimValid ? Math.min(trimEnd, probe.duration) : probe.duration }
+      : modeType === 'segments'
+      ? {
+          type: 'segments',
+          join: segmentsJoin,
+          segments: segments.map((sg) => (sg.name.trim() ? { start: sg.start, end: sg.end, name: sg.name.trim() } : { start: sg.start, end: sg.end })),
+        }
       : { type: 'points', times: boundaryTimes, minPartSeconds, origin: 'scenes' };
+
+  // Segmente: es muss etwas übrig bleiben UND etwas wegfallen (sonst gibt es nichts zu schneiden)
+  const segmentsReady =
+    !!plan && modeType === 'segments' && segments.length > 0 && plan.parts.some((p) => p.keep !== false) && plan.cuts.length > 0;
 
   // Fetch plan with debounce 150ms
   useEffect(() => {
@@ -320,7 +337,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
     }, 150);
 
     return () => clearTimeout(timer);
-  }, [videoId, modeType, partCount, everyMinutes, boundaryKey, minPartSeconds, maxSizeMb, trimStartText, trimEndText]);
+  }, [videoId, modeType, partCount, everyMinutes, boundaryKey, minPartSeconds, maxSizeMb, trimStartText, trimEndText, segmentsKey, segmentsJoin]);
 
   // Keyboard navigation: Enter = cut, ArrowUp/ArrowDown = parts +1 / -1
   useEffect(() => {
@@ -347,7 +364,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
         }
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (!isStartingSplit && plan && plan.parts.length > 1) {
+        if (!isStartingSplit && plan && (modeType === 'segments' ? segmentsReady : plan.parts.length > 1)) {
           onStartSplit(currentMode);
         }
       }
@@ -355,7 +372,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [modeType, partCount, everyMinutes, isStartingSplit, currentMode, onStartSplit, plan]);
+  }, [modeType, partCount, everyMinutes, isStartingSplit, currentMode, onStartSplit, plan, segmentsReady]);
 
   const quickChipsCount = [2, 3, 4, 5, 8, 10];
   const quickChipsMinutes = [1, 2, 5, 10, 15, 30];
@@ -613,6 +630,17 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
               Ausschnitt
             </button>
             <button
+              onClick={() => setModeType('segments')}
+              className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                modeType === 'segments'
+                  ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Segmente
+            </button>
+            <button
               onClick={() => setModeType('scenes')}
               className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all cursor-pointer ${
                 modeType === 'scenes'
@@ -759,6 +787,52 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Segment-Modus */}
+        {modeType === 'segments' && (
+          <div className="space-y-4">
+            <SegmentEditor
+              videoId={videoId}
+              duration={probe.duration}
+              keyframes={probe.keyframes}
+              fps={probe.video?.fps || 25}
+              segments={segments}
+              onChange={setSegments}
+              selectedId={selectedSegmentId}
+              onSelect={setSelectedSegmentId}
+              playerTime={playerTime}
+              onSeek={showPlayer ? seek : undefined}
+            />
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800">
+              <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">Ausgabe:</span>
+              <div className="flex items-center gap-1 p-1 bg-zinc-100 dark:bg-zinc-800/80 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setSegmentsJoin(true)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    segmentsJoin ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs' : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  Eine Datei (zusammengefügt)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSegmentsJoin(false)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    !segmentsJoin ? 'bg-white dark:bg-zinc-900 text-blue-600 dark:text-blue-400 shadow-xs' : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  Einzelne Dateien
+                </button>
+              </div>
+              <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {segmentsJoin
+                  ? 'Alle Segmente werden an Keyframes geschnitten und in der Kartenreihenfolge verlustfrei zu einer Datei verbunden – in einem Durchgang.'
+                  : 'Jedes Segment wird eine eigene Datei, nummeriert in der Kartenreihenfolge.'}
+              </span>
+            </div>
           </div>
         )}
 
@@ -919,7 +993,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
         )}
 
         {/* Timeline Visualization */}
-        {plan && (
+        {plan && modeType !== 'segments' && (
           <div className="pt-2">
             <Timeline
               duration={probe.duration}
@@ -947,7 +1021,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
         )}
 
         {/* Parts List with Thumbnails */}
-        {plan && plan.parts.length > 0 && (
+        {plan && plan.parts.length > 0 && modeType !== 'segments' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between text-xs font-semibold text-zinc-500 dark:text-zinc-400">
               <span>
@@ -1037,6 +1111,26 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
           </div>
         )}
 
+        {/* Segment-Modus: Hinweise + CSV */}
+        {plan && modeType === 'segments' && segments.length > 0 && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+              {keptParts.length} Teil{keptParts.length === 1 ? '' : 'e'} werden behalten, {plan.parts.length - keptParts.length} verworfen
+              {plan.maxDeltaSeconds > 0.01 ? ` · Keyframe-Abweichung max. ${plan.maxDeltaSeconds.toFixed(2)} s` : ' · alle Grenzen liegen exakt auf Keyframes'}
+            </span>
+            <button
+              type="button"
+              onClick={downloadLosslessCutCsv}
+              title="Segmente als CSV (start,end,name) für LosslessCut"
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-blue-600 dark:hover:text-blue-400 cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Als LosslessCut-CSV
+            </button>
+          </div>
+        )}
+
         {/* Kapitel-Export (nur Szenen-Modus) */}
         {modeType === 'scenes' && scenes && onStartChapters && (
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700/60">
@@ -1066,7 +1160,11 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
               isStartingSplit ||
               !plan ||
               sceneProgress !== null ||
-              (modeType === 'trim' ? !trimValid || keptParts.length === 0 || plan.parts.length <= 1 : plan.parts.length <= 1)
+              (modeType === 'trim'
+                ? !trimValid || keptParts.length === 0 || plan.parts.length <= 1
+                : modeType === 'segments'
+                ? !segmentsReady
+                : plan.parts.length <= 1)
             }
             className="w-full py-4 px-6 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-300 dark:disabled:bg-zinc-800 text-white font-bold text-base transition-all shadow-md shadow-blue-600/20 hover:shadow-lg hover:shadow-blue-600/30 flex items-center justify-center gap-3 cursor-pointer disabled:cursor-not-allowed"
           >
@@ -1082,6 +1180,16 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
                 ? trimValid && keptParts.length > 0
                   ? `Ausschnitt ${formatTime(keptParts[0].start)} – ${formatTime(keptParts[keptParts.length - 1].end)} speichern`
                   : 'Bereich wählen'
+                : modeType === 'segments'
+                ? segments.length === 0
+                  ? 'Erst Segmente aufziehen'
+                  : !segmentsReady
+                  ? plan && plan.cuts.length === 0 && keptParts.length > 0
+                    ? 'Nichts zu schneiden – das Segment ist das ganze Video'
+                    : 'Segmente liegen zwischen zwei Keyframes'
+                  : segmentsJoin
+                  ? `${segments.length} Segment${segments.length === 1 ? '' : 'e'} schneiden und zu einer Datei zusammenfügen`
+                  : `${segments.length} Segment${segments.length === 1 ? '' : 'e'} als einzelne Dateien schneiden`
                 : modeType === 'size'
                 ? `In ${totalCalculatedParts} Teile schneiden (max. ${maxSizeMb >= 1024 ? `${(maxSizeMb / 1024).toFixed(maxSizeMb % 1024 === 0 ? 0 : 1)} GB` : `${maxSizeMb} MB`})`
                 : `In ${totalCalculatedParts} Teile schneiden`}

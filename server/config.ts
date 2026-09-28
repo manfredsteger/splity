@@ -30,6 +30,7 @@ export const EINGANG_DIR = path.join(SPLITY_DIR, 'Eingang');
 export const FERTIG_DIR = path.join(SPLITY_DIR, 'Fertig');
 export const CACHE_DIR = path.join(DATA_DIR, 'cache');
 export const THUMBS_DIR = path.join(CACHE_DIR, 'thumbs');
+export const PREVIEW_DIR = path.join(CACHE_DIR, 'preview');
 export const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 export const JOBS_FILE = path.join(DATA_DIR, 'jobs.json');
 
@@ -77,6 +78,7 @@ export function ensureDirectories(): void {
     FERTIG_DIR,
     CACHE_DIR,
     THUMBS_DIR,
+    PREVIEW_DIR,
   ];
 
   for (const dir of dirs) {
@@ -95,6 +97,21 @@ export function ensureDirectories(): void {
           fs.rmSync(tmpPath, { recursive: true, force: true });
         } catch {
           // ignore cleanup errors on startup
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // Halbfertige Vorschau-Kopien aus einem früheren Lauf entfernen
+  try {
+    for (const entry of fs.readdirSync(PREVIEW_DIR, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.tmp.mp4')) {
+        try {
+          fs.rmSync(path.join(PREVIEW_DIR, entry.name), { force: true });
+        } catch {
+          // ignore
         }
       }
     }

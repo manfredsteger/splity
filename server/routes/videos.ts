@@ -20,7 +20,8 @@ import { checkRemux, REMUX_TARGETS, type RemuxTarget } from '../media/tools.js';
 import { getCachedScenes, SENSITIVITY_THRESHOLDS } from '../media/scenes.js';
 import { getTargetExtension } from '../media/split.js';
 import { encodeVideoId, listVideos, resolveVideo } from '../sources.js';
-import type { SceneParams, SplitMode } from '../types.js';
+import { cancelPreviewBuild, deletePreview, getPreviewEmitter, getPreviewStatus, previewPathFor, startPreviewBuild } from '../media/preview.js';
+import type { SceneParams, SegmentSpec, SplitMode } from '../types.js';
 
 export const videosRouter = Router();
 
@@ -48,6 +49,20 @@ function parseSplitMode(raw: unknown): SplitMode | null {
     const end = Number(mode.end);
     if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) return null;
     return { type: 'trim', start, end };
+  }
+  if (mode.type === 'segments') {
+    if (!Array.isArray(mode.segments) || mode.segments.length > 500) return null;
+    const segments: SegmentSpec[] = [];
+    for (const raw of mode.segments) {
+      if (!raw || typeof raw !== 'object') return null;
+      const seg = raw as Record<string, unknown>;
+      const start = Number(seg.start);
+      const end = Number(seg.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) return null;
+      const name = typeof seg.name === 'string' ? seg.name.slice(0, 120) : undefined;
+      segments.push(name ? { start, end, name } : { start, end });
+    }
+    return { type: 'segments', segments, join: mode.join !== false };
   }
   if (mode.type === 'points') {
     if (!Array.isArray(mode.times)) return null;
@@ -449,6 +464,45 @@ const STREAM_MIME: Record<string, string> = {
   '.m2ts': 'video/mp2t',
 };
 
+/** Datei mit HTTP-Range (206) ausliefern, damit der Browser springen kann */
+function sendFileWithRange(req: import('express').Request, res: import('express').Response, filePath: string, mime: string): void {
+  const stat = fs.statSync(filePath);
+  const total = stat.size;
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+
+  const range = req.headers.range;
+  if (!range) {
+    res.setHeader('Content-Length', String(total));
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+  const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!m) {
+    res.setHeader('Content-Range', `bytes */${total}`);
+    res.status(416).end();
+    return;
+  }
+  let start = m[1] ? parseInt(m[1], 10) : 0;
+  let end = m[2] ? parseInt(m[2], 10) : total - 1;
+  if (!m[1] && m[2]) {
+    // Suffix-Range: die letzten N Bytes
+    start = Math.max(0, total - parseInt(m[2], 10));
+    end = total - 1;
+  }
+  if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= total) {
+    res.setHeader('Content-Range', `bytes */${total}`);
+    res.status(416).end();
+    return;
+  }
+  end = Math.min(end, total - 1);
+  res.status(206);
+  res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+  res.setHeader('Content-Length', String(end - start + 1));
+  fs.createReadStream(filePath, { start, end }).pipe(res);
+}
+
 // GET /api/videos/:id/stream - Vorschau im Browser mit HTTP-Range (206), damit man springen kann
 videosRouter.get('/:id/stream', (req, res, next) => {
   try {
@@ -456,39 +510,103 @@ videosRouter.get('/:id/stream', (req, res, next) => {
     if (!resolved) {
       return res.status(404).json({ error: 'Video nicht gefunden.' });
     }
-    const stat = fs.statSync(resolved.absPath);
-    const total = stat.size;
     const mime = STREAM_MIME[path.extname(resolved.absPath).toLowerCase()] || 'application/octet-stream';
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', mime);
-    res.setHeader('Cache-Control', 'private, max-age=3600');
+    sendFileWithRange(req, res, resolved.absPath, mime);
+  } catch (err: any) {
+    next(err);
+  }
+});
 
-    const range = req.headers.range;
-    if (!range) {
-      res.setHeader('Content-Length', String(total));
-      return fs.createReadStream(resolved.absPath).pipe(res);
+// Vorschau-Kopie (kleine H.264-Datei für Browser ohne HEVC/MKV-Unterstützung)
+// GET    /api/videos/:id/preview         - Status
+// POST   /api/videos/:id/preview         - erzeugen (läuft neben der Warteschlange)
+// DELETE /api/videos/:id/preview         - abbrechen bzw. löschen
+// GET    /api/videos/:id/preview/events  - SSE-Fortschritt
+// GET    /api/videos/:id/preview/stream  - Range-Stream der Kopie
+videosRouter.get('/:id/preview', (req, res) => {
+  const resolved = resolveVideo(req.params.id);
+  if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+  res.json(getPreviewStatus(resolved.absPath));
+});
+
+videosRouter.post('/:id/preview', async (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+    const probe = await probeVideo(resolved, req.params.id);
+    if (!probe.video) return res.status(400).json({ error: 'Ohne Videospur gibt es keine Vorschau-Kopie.' });
+    const status = startPreviewBuild(resolved, probe);
+    res.status(status.available ? 200 : 202).json(status);
+  } catch (err) {
+    next(err);
+  }
+});
+
+videosRouter.delete('/:id/preview', (req, res) => {
+  const resolved = resolveVideo(req.params.id);
+  if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+  const wasBuilding = getPreviewStatus(resolved.absPath).building;
+  const ok = wasBuilding ? cancelPreviewBuild(resolved.absPath) : deletePreview(resolved.absPath);
+  res.json({ ok, cancelled: wasBuilding });
+});
+
+videosRouter.get('/:id/preview/events', (req, res) => {
+  const resolved = resolveVideo(req.params.id);
+  if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+  const send = (data: unknown) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const end = () =>
+    setTimeout(() => {
+      try {
+        res.end();
+      } catch {
+        // ignore
+      }
+    }, 200);
+
+  const status = getPreviewStatus(resolved.absPath);
+  send({ type: status.available ? 'done' : status.building ? 'progress' : 'idle', percent: status.percent });
+  const emitter = getPreviewEmitter(resolved.absPath);
+  if (!emitter) return end();
+
+  const onProgress = (percent: number) => send({ type: 'progress', percent });
+  const onDone = () => {
+    send({ type: 'done', percent: 100 });
+    end();
+  };
+  const onError = (err: any) => {
+    send({ type: 'error', error: err?.message || 'Fehler' });
+    end();
+  };
+  emitter.on('progress', onProgress);
+  emitter.once('done', onDone);
+  emitter.once('error', onError);
+  const ping = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      // ignore
     }
-    const m = /^bytes=(\d*)-(\d*)$/.exec(range);
-    if (!m) {
-      res.setHeader('Content-Range', `bytes */${total}`);
-      return res.status(416).end();
-    }
-    let start = m[1] ? parseInt(m[1], 10) : 0;
-    let end = m[2] ? parseInt(m[2], 10) : total - 1;
-    if (!m[1] && m[2]) {
-      // Suffix-Range: die letzten N Bytes
-      start = Math.max(0, total - parseInt(m[2], 10));
-      end = total - 1;
-    }
-    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= total) {
-      res.setHeader('Content-Range', `bytes */${total}`);
-      return res.status(416).end();
-    }
-    end = Math.min(end, total - 1);
-    res.status(206);
-    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
-    res.setHeader('Content-Length', String(end - start + 1));
-    fs.createReadStream(resolved.absPath, { start, end }).pipe(res);
+  }, 15000);
+  req.on('close', () => {
+    clearInterval(ping);
+    emitter.off('progress', onProgress);
+    emitter.off('done', onDone);
+    emitter.off('error', onError);
+  });
+});
+
+videosRouter.get('/:id/preview/stream', (req, res, next) => {
+  try {
+    const resolved = resolveVideo(req.params.id);
+    if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
+    const file = previewPathFor(resolved.absPath);
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'Keine Vorschau-Kopie vorhanden.' });
+    sendFileWithRange(req, res, file, 'video/mp4');
   } catch (err: any) {
     next(err);
   }

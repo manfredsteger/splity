@@ -3,15 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { JOBS_FILE, loadSettings } from './config.js';
 import { exportChapters } from './media/chapters.js';
-import { executeMerge, type MergeInput } from './media/merge.js';
+import { concatCopy, executeMerge, type MergeInput } from './media/merge.js';
 import { planSplit } from './media/plan.js';
 import { probeVideo } from './media/probe.js';
 import { detectScenes } from './media/scenes.js';
 import { checkRemux, extractAudio, remux, type RemuxTarget } from './media/tools.js';
-import { executeSplit } from './media/split.js';
+import { executeSplit, formatHms, getMediaDuration, sanitizeFileName, type SplitOptions } from './media/split.js';
 import { verifySequence } from './media/verify.js';
 import { decodeVideoId, resolveVideo } from './sources.js';
-import type { Job, JobPhase, JobType, ProbeResult, SceneParams, SplitMode, SplitResult } from './types.js';
+import type { Job, JobPhase, JobType, Part, ProbeResult, SceneParams, SplitMode, SplitResult, VerificationResult } from './types.js';
 
 type NewJobFields = Pick<Job, 'type' | 'videoId' | 'videoName' | 'mode'> &
   Partial<Pick<Job, 'sceneParams' | 'chapterTimes' | 'chapterTitles' | 'inputIds' | 'inputNames' | 'outputName' | 'remuxTarget' | 'audioTrack'>>;
@@ -209,7 +209,7 @@ class JobQueue extends EventEmitter {
     outputs: string[],
     packetEstimate: number,
     result: SplitResult,
-    mode: 'exact' | 'subsequence' = 'exact',
+    mode: 'exact' | 'subsequence' | 'segments' = 'exact',
     maps?: { inputMap?: string[]; outputMap?: string[] }
   ): Promise<void> {
     if (!loadSettings().verifyAfterSplit) {
@@ -382,13 +382,31 @@ class JobQueue extends EventEmitter {
       nextJob.totalParts = plan.parts.length;
       this.emit(`job:${nextJob.id}`, nextJob);
 
-      const handle = executeSplit(resolved.absPath, probe, plan, (prog) => {
-        if (this.isCancelled(nextJob)) return;
-        nextJob.progress = prog.percent;
-        nextJob.currentPart = prog.currentPart;
-        nextJob.totalParts = prog.totalParts;
-        this.emit(`job:${nextJob.id}`, nextJob);
-      });
+      const isSegments = nextJob.mode.type === 'segments';
+      const splitOptions: SplitOptions = isSegments
+        ? {
+            dirSuffix: ' (Segmente)',
+            fileNameFor: (part, _keptIndex, keptTotal, ext, base) => {
+              const nr = String(part.segment ?? 0).padStart(keptTotal >= 100 ? 3 : 2, '0');
+              const label = part.name?.trim() ? part.name.trim() : `Segment ${part.segment ?? 0}`;
+              return `${base} - ${nr} ${label} (${formatHms(part.start)} bis ${formatHms(part.end)})${ext}`;
+            },
+          }
+        : {};
+
+      const handle = executeSplit(
+        resolved.absPath,
+        probe,
+        plan,
+        (prog) => {
+          if (this.isCancelled(nextJob)) return;
+          nextJob.progress = prog.percent;
+          nextJob.currentPart = prog.currentPart;
+          nextJob.totalParts = prog.totalParts;
+          this.emit(`job:${nextJob.id}`, nextJob);
+        },
+        splitOptions
+      );
       this.activeHandle = handle;
       const result = await handle.promise;
       this.activeHandle = null;
@@ -401,9 +419,15 @@ class JobQueue extends EventEmitter {
         partPaths,
         this.packetEstimate([probe]),
         result,
-        nextJob.mode.type === 'trim' ? 'subsequence' : 'exact'
+        nextJob.mode.type === 'trim' ? 'subsequence' : isSegments ? 'segments' : 'exact'
       );
       if (this.isCancelled(nextJob)) return;
+
+      if (isSegments && nextJob.mode.type === 'segments' && nextJob.mode.join) {
+        await this.joinSegments(nextJob, resolved.absPath, probe, plan.parts, result);
+        if (this.isCancelled(nextJob)) return;
+      }
+
       nextJob.currentPart = plan.parts.length;
       this.finishJob(nextJob, result);
     } catch (err: any) {
@@ -421,6 +445,97 @@ class JobQueue extends EventEmitter {
       this.saveJobs();
       setTimeout(() => this.processNext(), 100);
     }
+  }
+
+  /**
+   * Segment-Modus mit „eine Datei“: die geschnittenen Teile in Segment-Reihenfolge verlustfrei
+   * aneinanderhängen (concat-Demuxer), Ergebnis gegen die Teile prüfen, Teile danach löschen.
+   */
+  private async joinSegments(job: Job, sourcePath: string, probe: ProbeResult, parts: Part[], result: SplitResult): Promise<void> {
+    const kept = parts.filter((p) => p.keep !== false);
+    if (kept.length !== result.files.length) {
+      result.warnings.push('Zusammenfügen übersprungen: Anzahl der Teile passt nicht zum Plan.');
+      return;
+    }
+    const ext = path.extname(result.files[0].name);
+    const baseName = sanitizeFileName(job.videoName.replace(/\.[^.]+$/, '')) || 'video';
+    const outName = `${baseName} (geschnitten)${ext}`;
+    const outPath = path.join(result.outputDir, outName);
+    // Reihenfolge: Segment-Nummer (= Nutzerreihenfolge), innerhalb eines Segments nach Zeit
+    const order = kept
+      .map((p, i) => ({ p, i }))
+      .sort((a, b) => (a.p.segment ?? 0) - (b.p.segment ?? 0) || a.p.start - b.p.start)
+      .map((x) => x.i);
+    const inputPaths = order.map((i) => path.join(result.outputDir, result.files[i].name));
+    const totalDuration = kept.reduce((s, p) => s + p.duration, 0);
+
+    job.phase = 'merge';
+    job.progress = 0;
+    this.saveJobs();
+    this.emitJob(job);
+
+    const partsVerification = result.verification;
+    if (inputPaths.length === 1) {
+      fs.renameSync(inputPaths[0], outPath);
+    } else {
+      let child: import('node:child_process').ChildProcess | null = null;
+      this.activeHandle = {
+        cancel: () => {
+          try {
+            child?.kill('SIGTERM');
+          } catch {
+            // ignore
+          }
+        },
+      };
+      const { warnings } = await concatCopy(
+        inputPaths,
+        sourcePath,
+        probe,
+        outPath,
+        totalDuration,
+        probe.hasDataStreams,
+        (pct) => {
+          if (this.isCancelled(job)) return;
+          if (pct !== job.progress) {
+            job.progress = pct;
+            this.emit(`job:${job.id}`, job);
+          }
+        },
+        { isCancelled: () => this.isCancelled(job), setChild: (c) => (child = c) }
+      );
+      this.activeHandle = null;
+      if (this.isCancelled(job)) {
+        fs.rmSync(result.outputDir, { recursive: true, force: true });
+        return;
+      }
+      result.warnings.push(...warnings);
+
+      // Zweite Prüfung: die zusammengefügte Datei muss exakt die Teile in dieser Reihenfolge sein
+      await this.runVerification(job, inputPaths, [outPath], this.packetEstimate([probe]), result, 'exact');
+      if (this.isCancelled(job)) return;
+      const joinVerification = result.verification;
+      if (partsVerification && joinVerification) {
+        const merged: VerificationResult = {
+          ok: partsVerification.ok && joinVerification.ok,
+          skipped: partsVerification.skipped && joinVerification.skipped,
+          streams: joinVerification.streams.map((st) => ({
+            ...st,
+            packetsOriginal: partsVerification.streams.find((o) => o.index === st.index)?.packetsOriginal ?? st.packetsOriginal,
+          })),
+          durationMs: partsVerification.durationMs + joinVerification.durationMs,
+          errorMessage: partsVerification.errorMessage || joinVerification.errorMessage,
+        };
+        result.verification = merged;
+      }
+      for (const p of inputPaths) fs.rmSync(p, { force: true });
+    }
+
+    const duration = await getMediaDuration(outPath);
+    if (Math.abs(duration - totalDuration) > 1 + inputPaths.length * 0.1) {
+      result.warnings.push(`Dauer-Abweichung: Segmente zusammen ${totalDuration.toFixed(1)} s, Ausgabe ${duration.toFixed(1)} s.`);
+    }
+    result.files = [{ name: outName, size: fs.statSync(outPath).size, duration: Math.round(duration * 100) / 100 }];
   }
 
   private async runMerge(job: Job, onProgress: (pct: number) => void): Promise<void> {

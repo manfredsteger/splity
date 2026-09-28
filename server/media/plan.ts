@@ -1,4 +1,4 @@
-import type { Cut, Part, SplitMode, SplitPlan } from '../types.js';
+import type { Cut, Part, SegmentSpec, SplitMode, SplitPlan } from '../types.js';
 
 /**
  * Calculates a lossless split plan by snapping ideal cut points to the nearest available keyframes.
@@ -106,6 +106,14 @@ export function planSplit(
       warnings.push('Das Ende des Ausschnitts muss nach dem Anfang liegen.');
       idealCutPoints = [];
     }
+  } else if (mode.type === 'segments') {
+    for (const seg of mode.segments || []) {
+      if (!(seg.end > seg.start)) continue;
+      idealCutPoints.push(seg.start, seg.end);
+    }
+    idealCutPoints = Array.from(new Set(idealCutPoints.filter((t) => t >= minThreshold && t <= maxThreshold))).sort((a, b) => a - b);
+    requestedPartsCount = idealCutPoints.length + 1;
+    if ((mode.segments || []).length === 0) warnings.push('Kein Segment angelegt – bitte mindestens einen Bereich aufziehen.');
   } else if (mode.type === 'size') {
     if (!gopBytes || gopBytes.length !== keyframes.length) {
       warnings.push('Größeninformation fehlt – bitte das Video neu analysieren (ältere Analyse).');
@@ -133,6 +141,7 @@ export function planSplit(
             // Trimmen ohne wirksame Grenze: deckt der Bereich das ganze Video ab, bleibt es (nichts
             // zu schneiden); liegt er zwischen zwei Keyframes, gibt es nichts zu behalten.
             ...(mode.type === 'trim' ? { keep: mode.start < minThreshold && mode.end > maxThreshold } : {}),
+            ...(mode.type === 'segments' ? wholeVideoSegment(mode.segments || [], minThreshold, maxThreshold) : {}),
           },
         ],
         keyframes,
@@ -259,10 +268,78 @@ export function planSplit(
     }
   }
 
+  // Segmente: jedes Segment auf Keyframes legen, Teile dazwischen behalten, Rest verwerfen.
+  // Die Nummer im Teil ist die Position des Segments in der vom Nutzer gewählten Reihenfolge.
+  if (mode.type === 'segments') {
+    finalParts = assignSegments(finalParts, mode.segments || [], candidateKeyframes, duration, minThreshold, maxThreshold, warnings);
+  }
+
   return {
     cuts,
     parts: finalParts,
     warnings,
     maxDeltaSeconds: Math.round(maxDeltaSeconds * 1000) / 1000,
   };
+}
+
+/** Nächstgelegener Keyframe; Anfang/Ende des Videos zählen als Keyframe */
+export function snapToKeyframe(t: number, candidates: number[], duration: number, minThreshold = 0.05, maxThreshold = duration - 0.05): number {
+  if (t < minThreshold) return 0;
+  if (t > maxThreshold) return round3(duration);
+  let best = candidates.length > 0 ? candidates[0] : 0;
+  let bestDiff = Math.abs(best - t);
+  for (const kf of candidates) {
+    const d = Math.abs(kf - t);
+    if (d < bestDiff) {
+      best = kf;
+      bestDiff = d;
+    }
+  }
+  // Anfang/Ende können näher liegen als jeder innere Keyframe
+  if (t - 0 < bestDiff) return 0;
+  if (duration - t < bestDiff) return round3(duration);
+  return round3(best);
+}
+
+function wholeVideoSegment(segments: SegmentSpec[], minThreshold: number, maxThreshold: number): Partial<Part> {
+  const idx = segments.findIndex((s) => s.start < minThreshold && s.end > maxThreshold);
+  if (idx < 0) return { keep: false };
+  return { keep: true, segment: idx + 1, ...(segments[idx].name ? { name: segments[idx].name } : {}) };
+}
+
+function assignSegments(
+  parts: Part[],
+  segments: SegmentSpec[],
+  candidates: number[],
+  duration: number,
+  minThreshold: number,
+  maxThreshold: number,
+  warnings: string[]
+): Part[] {
+  const snapped = segments.map((seg, i) => ({
+    index: i + 1,
+    name: seg.name,
+    start: snapToKeyframe(seg.start, candidates, duration, minThreshold, maxThreshold),
+    end: snapToKeyframe(seg.end, candidates, duration, minThreshold, maxThreshold),
+  }));
+  const collapsed = snapped.filter((s) => !(s.end > s.start));
+  if (collapsed.length > 0) {
+    warnings.push(
+      `${collapsed.length === 1 ? `Segment ${collapsed[0].index} liegt` : `${collapsed.length} Segmente liegen`} zwischen zwei Keyframes und ${collapsed.length === 1 ? 'fällt' : 'fallen'} weg – bitte etwas weiter fassen.`
+    );
+  }
+  const valid = snapped.filter((s) => s.end > s.start);
+  let overlaps = 0;
+  const result = parts.map((p) => {
+    const owners = valid.filter((s) => p.start >= s.start - 0.0005 && p.end <= s.end + 0.0005);
+    if (owners.length > 1) overlaps++;
+    if (owners.length === 0) return { ...p, keep: false };
+    const owner = owners[0];
+    return { ...p, keep: true, segment: owner.index, ...(owner.name ? { name: owner.name } : {}) };
+  });
+  if (overlaps > 0) warnings.push('Segmente überlappen sich – überlappende Teile werden nur einmal ausgegeben.');
+  if (valid.length > 0 && !result.some((p) => p.keep)) {
+    warnings.push('Kein Segment deckt einen ganzen Keyframe-Abschnitt ab – bitte weiter fassen.');
+  }
+  return result;
 }

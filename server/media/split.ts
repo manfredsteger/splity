@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { FERTIG_DIR, SPLITY_DIR, SPLITY_HOST_PATH, getFreeDiskBytes, loadSettings } from '../config.js';
-import type { ProbeResult, SplitPlan, SplitResult, SplitResultFile } from '../types.js';
+import type { Part, ProbeResult, SplitPlan, SplitResult, SplitResultFile } from '../types.js';
 
 export interface SplitProgressCallback {
   (progress: { percent: number; currentPart: number; totalParts: number }): void;
@@ -119,11 +119,19 @@ export async function getMediaDuration(filePath: string): Promise<number> {
   });
 }
 
+export interface SplitOptions {
+  /** Eigener Dateiname je behaltenem Teil (Segment-Modus); keptIndex/keptTotal zählen nur behaltene Teile */
+  fileNameFor?: (part: Part, keptIndex: number, keptTotal: number, ext: string, baseName: string) => string;
+  /** Anhang für den Ausgabeordner, z. B. " (Segmente)" */
+  dirSuffix?: string;
+}
+
 export function executeSplit(
   sourceFilePath: string,
   probe: ProbeResult,
   plan: SplitPlan,
-  onProgress: SplitProgressCallback
+  onProgress: SplitProgressCallback,
+  options: SplitOptions = {}
 ): SplitExecutionHandle {
   let activeChild: ChildProcess | null = null;
   let isCancelled = false;
@@ -172,7 +180,7 @@ export function executeSplit(
     const cleanBaseName = sanitizeFileName(rawBaseName) || 'video';
     const targetExt = getTargetExtension(sourceExt);
 
-    const finalDirName = findUniqueDirectoryName(FERTIG_DIR, cleanBaseName);
+    const finalDirName = findUniqueDirectoryName(FERTIG_DIR, `${cleanBaseName}${options.dirSuffix || ''}`);
     const finalDirPath = path.join(FERTIG_DIR, finalDirName);
     const hostOutputDir = path.join(SPLITY_HOST_PATH, 'Fertig', finalDirName);
 
@@ -373,8 +381,9 @@ export function executeSplit(
     const settings = loadSettings();
     const resultFiles: SplitResultFile[] = [];
     let sumDurations = 0;
-    const isTrim = plan.parts.some((p) => p.keep === false);
+    const hasDropped = plan.parts.some((p) => p.keep === false);
     const expectedParts = plan.parts.filter((p) => p.keep !== false);
+    let keptIndex = 0;
 
     for (let i = 0; i < generatedRawFiles.length; i++) {
       const rawName = generatedRawFiles[i];
@@ -382,12 +391,15 @@ export function executeSplit(
       const partIndex = i + 1;
 
       const part = plan.parts[i];
-      if (isTrim && part && part.keep === false) {
-        // Trimmen: Teile außerhalb des Bereichs verwerfen
+      if (hasDropped && part && part.keep === false) {
+        // Trimmen/Segmente: Teile außerhalb der Bereiche verwerfen
         fs.rmSync(rawPath, { force: true });
         continue;
       }
-      const finalPartName = isTrim
+      keptIndex++;
+      const finalPartName = options.fileNameFor && part
+        ? sanitizeFileName(options.fileNameFor(part, keptIndex, expectedParts.length, targetExt, cleanBaseName)) || `teil_${keptIndex}${targetExt}`
+        : hasDropped
         ? sanitizeFileName(
             `${cleanBaseName} (Ausschnitt ${formatHms(part?.start ?? 0)} bis ${formatHms(part?.end ?? 0)})`
           ) + targetExt
@@ -427,7 +439,7 @@ export function executeSplit(
     }
 
     // Check sum of durations ≈ expected duration (tolerance: 1s + 1 GOP approx 3s)
-    const expectedDuration = isTrim ? expectedParts.reduce((s, p) => s + p.duration, 0) : probe.duration;
+    const expectedDuration = hasDropped ? expectedParts.reduce((s, p) => s + p.duration, 0) : probe.duration;
     const tolerance = 1.0 + Math.max(1.0, probe.keyframeIntervalAvg);
     if (Math.abs(sumDurations - expectedDuration) > tolerance) {
       warnings.push(

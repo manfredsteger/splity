@@ -89,6 +89,89 @@ export interface MergeHandle {
   cancel: () => void;
 }
 
+export interface ConcatControl {
+  isCancelled: () => boolean;
+  setChild: (child: ChildProcess | null) => void;
+}
+
+/**
+ * Verlustfreies Aneinanderhängen per concat-Demuxer (gemeinsamer Kern von „Zusammenfügen“ und
+ * dem Segment-Modus). Die Metadaten kommen aus `metadataSource` (Eingang 1).
+ */
+export async function concatCopy(
+  inputPaths: string[],
+  metadataSource: string,
+  refProbe: ProbeResult,
+  outPath: string,
+  totalDuration: number,
+  hasData: boolean,
+  onProgress: (percent: number) => void,
+  control: ConcatControl
+): Promise<{ warnings: string[] }> {
+  const targetExt = path.extname(outPath).toLowerCase();
+  const listDir = path.join(DATA_DIR, 'tmp');
+  fs.mkdirSync(listDir, { recursive: true });
+  const listPath = path.join(listDir, `merge_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`);
+  fs.writeFileSync(listPath, formatConcatList(inputPaths), 'utf-8');
+  const isHevc = (refProbe.video?.codec || '').toLowerCase().includes('hevc');
+
+  const buildArgs = (withData: boolean) => {
+    // -auto_convert 0 ist Pflicht: Sonst schleust der concat-Demuxer SPS/PPS (h264_mp4toannexb
+    // hin und zurück) in das erste Paket jeder Datei ein – semantisch harmlos, aber nicht mehr
+    // bit-identisch zum Original (getestet: 12 von 3932 Paketen anders, mit der Option 0).
+    // Die Quelle zusätzlich als Eingang 1 nur für die Metadaten: Der concat-Demuxer selbst hat
+    // keine, ohne diesen Kniff verliert die Ausgabe alle globalen Tags (Aufnahmedatum, Gerät).
+    const args = ['-hide_banner', '-nostdin', '-y', '-progress', 'pipe:1', '-nostats', '-f', 'concat', '-safe', '0', '-auto_convert', '0', '-i', listPath, '-i', metadataSource];
+    if (withData) args.push('-map', '0', '-ignore_unknown');
+    else args.push('-map', '0:v', '-map', '0:a?', '-map', '0:s?', '-dn');
+    args.push('-map_metadata', '1', '-c', 'copy', '-avoid_negative_ts', 'make_zero');
+    if (targetExt === '.mp4' || targetExt === '.mov') args.push('-movflags', '+faststart+use_metadata_tags', '-strict', 'experimental');
+    if (isHevc) args.push('-tag:v', 'hvc1');
+    args.push(outPath);
+    return args;
+  };
+
+  const run = (args: string[]) =>
+    new Promise<{ code: number; stderr: string[] }>((resolve, reject) => {
+      if (control.isCancelled()) return reject(new Error('Zusammenfügen abgebrochen'));
+      const child = spawn('ffmpeg', args);
+      control.setChild(child);
+      const stderr: string[] = [];
+      readline.createInterface({ input: child.stderr!, crlfDelay: Infinity }).on('line', (l) => {
+        stderr.push(l.trim());
+        if (stderr.length > 30) stderr.shift();
+      });
+      readline.createInterface({ input: child.stdout!, crlfDelay: Infinity }).on('line', (l) => {
+        if (l.startsWith('out_time_us=') && totalDuration > 0) {
+          const us = parseInt(l.slice(12), 10);
+          if (!Number.isNaN(us)) onProgress(Math.min(99, Math.max(0, Math.round((us / 1e6 / totalDuration) * 100))));
+        }
+      });
+      child.on('error', (e) => reject(e));
+      child.on('close', (code) => {
+        control.setChild(null);
+        resolve({ code: code ?? 1, stderr });
+      });
+    });
+
+  try {
+    const warnings: string[] = [];
+    let res = await run(buildArgs(true));
+    if (res.code !== 0 && !control.isCancelled() && hasData) {
+      fs.rmSync(outPath, { force: true });
+      res = await run(buildArgs(false));
+      if (res.code === 0) warnings.push('Datenspuren (z. B. Timecode) wurden weggelassen, Bild und Ton sind vollständig.');
+    }
+    if (control.isCancelled()) throw new Error('Zusammenfügen abgebrochen');
+    if (res.code !== 0) {
+      throw new Error(`ffmpeg-Fehler beim Zusammenfügen (Code ${res.code}): ${res.stderr.filter(Boolean).slice(-5).join('\n')}`);
+    }
+    return { warnings };
+  } finally {
+    fs.rmSync(listPath, { force: true });
+  }
+}
+
 export function executeMerge(
   inputs: MergeInput[],
   outputName: string | undefined,
@@ -137,66 +220,21 @@ export function executeMerge(
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.mkdirSync(tmpDir, { recursive: true });
 
-    const listDir = path.join(DATA_DIR, 'tmp');
-    fs.mkdirSync(listDir, { recursive: true });
-    const listPath = path.join(listDir, `merge_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`);
-    fs.writeFileSync(listPath, formatConcatList(inputs.map((i) => i.resolved.absPath)), 'utf-8');
-
     const outName = `${baseName} (zusammengefügt)${targetExt}`;
     const outPath = path.join(tmpDir, outName);
-    const isHevc = (first.probe.video?.codec || '').toLowerCase().includes('hevc');
     const hasData = inputs.some((i) => i.probe.hasDataStreams);
 
-    const buildArgs = (withData: boolean) => {
-      // -auto_convert 0 ist Pflicht: Sonst schleust der concat-Demuxer SPS/PPS (h264_mp4toannexb
-      // hin und zurück) in das erste Paket jeder Datei ein – semantisch harmlos, aber nicht mehr
-      // bit-identisch zum Original (getestet: 12 von 3932 Paketen anders, mit der Option 0).
-      // Die erste Datei zusätzlich als Eingang 1 nur für die Metadaten: Der concat-Demuxer selbst hat
-      // keine, ohne diesen Kniff verliert die Ausgabe alle globalen Tags (Aufnahmedatum, Gerät).
-      const args = ['-hide_banner', '-nostdin', '-y', '-progress', 'pipe:1', '-nostats', '-f', 'concat', '-safe', '0', '-auto_convert', '0', '-i', listPath, '-i', first.resolved.absPath];
-      if (withData) args.push('-map', '0', '-ignore_unknown');
-      else args.push('-map', '0:v', '-map', '0:a?', '-map', '0:s?', '-dn');
-      args.push('-map_metadata', '1', '-c', 'copy', '-avoid_negative_ts', 'make_zero');
-      if (targetExt === '.mp4' || targetExt === '.mov') args.push('-movflags', '+faststart+use_metadata_tags', '-strict', 'experimental');
-      if (isHevc) args.push('-tag:v', 'hvc1');
-      args.push(outPath);
-      return args;
-    };
-
-    const run = (args: string[]) =>
-      new Promise<{ code: number; stderr: string[] }>((resolve, reject) => {
-        if (cancelled) return reject(new Error('Zusammenfügen abgebrochen'));
-        child = spawn('ffmpeg', args);
-        const stderr: string[] = [];
-        readline.createInterface({ input: child.stderr!, crlfDelay: Infinity }).on('line', (l) => {
-          stderr.push(l.trim());
-          if (stderr.length > 30) stderr.shift();
-        });
-        readline.createInterface({ input: child.stdout!, crlfDelay: Infinity }).on('line', (l) => {
-          if (l.startsWith('out_time_us=') && totalDuration > 0) {
-            const us = parseInt(l.slice(12), 10);
-            if (!Number.isNaN(us)) onProgress(Math.min(99, Math.max(0, Math.round((us / 1e6 / totalDuration) * 100))));
-          }
-        });
-        child.on('error', (e) => reject(e));
-        child.on('close', (code) => {
-          child = null;
-          resolve({ code: code ?? 1, stderr });
-        });
-      });
-
     try {
-      const warnings: string[] = [];
-      let res = await run(buildArgs(true));
-      if (res.code !== 0 && !cancelled && hasData) {
-        fs.rmSync(outPath, { force: true });
-        res = await run(buildArgs(false));
-        if (res.code === 0) warnings.push('Datenspuren (z. B. Timecode) wurden weggelassen, Bild und Ton sind vollständig.');
-      }
-      if (cancelled) throw new Error('Zusammenfügen abgebrochen');
-      if (res.code !== 0) {
-        throw new Error(`ffmpeg-Fehler beim Zusammenfügen (Code ${res.code}): ${res.stderr.filter(Boolean).slice(-5).join('\n')}`);
-      }
+      const { warnings } = await concatCopy(
+        inputs.map((i) => i.resolved.absPath),
+        first.resolved.absPath,
+        first.probe,
+        outPath,
+        totalDuration,
+        hasData,
+        onProgress,
+        { isCancelled: () => cancelled, setChild: (c) => (child = c) }
+      );
 
       fs.renameSync(tmpDir, finalDir);
       tmpDir = '';
@@ -214,7 +252,6 @@ export function executeMerge(
         durationSeconds: Math.round(((Date.now() - started) / 1000) * 10) / 10,
       };
     } finally {
-      fs.rmSync(listPath, { force: true });
       if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   })();

@@ -45,3 +45,21 @@ export function formatDate(isoString: string): string {
     return isoString;
   }
 }
+
+/** "hh:mm:ss", "mm:ss" oder Sekunden -> Sekunden (NaN bei Unsinn) */
+export function parseTimeInput(text: string): number {
+  const t = text.trim().replace(',', '.');
+  if (!t) return NaN;
+  if (/^\d+(\.\d+)?$/.test(t)) return parseFloat(t);
+  const parts = t.split(':').map((x) => parseFloat(x));
+  if (parts.some((x) => Number.isNaN(x))) return NaN;
+  return parts.reduce((acc, x) => acc * 60 + x, 0);
+}
+
+/** Sekunden mit Hundertsteln, z. B. 01:02:03.45 – für Keyframe-genaue Eingabefelder */
+export function formatTimePrecise(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) return '00:00.00';
+  const base = formatTime(seconds);
+  const cs = Math.round((seconds - Math.floor(seconds)) * 100);
+  return `${base}.${String(cs === 100 ? 99 : cs).padStart(2, '0')}`;
+}
