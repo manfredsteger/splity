@@ -5,47 +5,68 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { PREVIEW_DIR } from '../config.js';
 import { getFileCacheKey } from './probe.js';
-import type { PreviewStatus, ProbeResult, ResolvedVideo } from '../types.js';
+import type { PreviewKind, PreviewStatus, ProbeResult, ResolvedVideo } from '../types.js';
 
 /**
  * Vorschau-Kopie: kleine H.264/AAC-Datei (max. 854 px breit) für Browser, die den Codec des
  * Originals nicht abspielen (HEVC/MKV/…). Läuft NEBEN der Job-Warteschlange, weil sie CPU
  * statt Platte braucht und einen Schnitt nicht blockieren soll. Die Quelle bleibt unverändert.
+ *
+ * Zwei Arten:
+ * - 'keyframes' (Standard): `-skip_frame nokey` decodiert nur die I-Frames – genau die Bilder, an denen
+ *   verlustfrei geschnitten werden kann. Bei 5K-HEVC mit 10-s-GOPs sind das 300 statt 180.000 Bilder,
+ *   also Sekunden statt Stunden. Ergebnis ist eine „Diashow“ mit Originalzeitstempeln.
+ * - 'full': alle Bilder, flüssig, aber das Original wird komplett decodiert.
  */
 interface PreviewBuild {
   emitter: EventEmitter;
+  kind: PreviewKind;
   percent: number;
   child: ChildProcess | null;
   cancelled: boolean;
   error?: string;
 }
 
-const builds = new Map<string, PreviewBuild>();
+const builds = new Map<string, PreviewBuild>(); // key = Basis-Cache-Key
 
-export function previewPathFor(absPath: string): string {
-  return path.join(PREVIEW_DIR, `${getFileCacheKey(absPath)}.mp4`);
+function baseKey(absPath: string): string {
+  return getFileCacheKey(absPath);
+}
+
+export function previewPathFor(absPath: string, kind: PreviewKind): string {
+  return path.join(PREVIEW_DIR, `${baseKey(absPath)}${kind === 'keyframes' ? '_kf' : ''}.mp4`);
+}
+
+/** Beste vorhandene Kopie: vollständig vor Keyframes */
+export function bestPreviewFile(absPath: string): { file: string; kind: PreviewKind } | null {
+  for (const kind of ['full', 'keyframes'] as PreviewKind[]) {
+    const file = previewPathFor(absPath, kind);
+    if (fs.existsSync(file)) return { file, kind };
+  }
+  return null;
 }
 
 export function getPreviewStatus(absPath: string): PreviewStatus {
-  const file = previewPathFor(absPath);
-  const build = builds.get(file);
+  const build = builds.get(baseKey(absPath));
+  const best = bestPreviewFile(absPath);
+  const status: PreviewStatus = best
+    ? { available: true, kind: best.kind, building: false, percent: 100, size: fs.statSync(best.file).size }
+    : { available: false, building: false, percent: 0 };
   if (build) {
-    return { available: false, building: true, percent: build.percent, error: build.error };
+    status.building = true;
+    status.buildingKind = build.kind;
+    status.percent = build.percent;
+    status.error = build.error;
   }
-  try {
-    const stat = fs.statSync(file);
-    return { available: true, building: false, percent: 100, size: stat.size };
-  } catch {
-    return { available: false, building: false, percent: 0 };
-  }
+  return status;
 }
 
 export function getPreviewEmitter(absPath: string): EventEmitter | null {
-  return builds.get(previewPathFor(absPath))?.emitter || null;
+  return builds.get(baseKey(absPath))?.emitter || null;
 }
 
 export function cancelPreviewBuild(absPath: string): boolean {
-  const build = builds.get(previewPathFor(absPath));
+  const build = builds.get(baseKey(absPath));
   if (!build) return false;
   build.cancelled = true;
   try {
@@ -57,36 +78,38 @@ export function cancelPreviewBuild(absPath: string): boolean {
 }
 
 export function deletePreview(absPath: string): boolean {
-  const file = previewPathFor(absPath);
-  if (builds.has(file)) return cancelPreviewBuild(absPath);
+  if (builds.has(baseKey(absPath))) return cancelPreviewBuild(absPath);
   try {
-    fs.rmSync(file, { force: true });
+    for (const kind of ['full', 'keyframes'] as PreviewKind[]) fs.rmSync(previewPathFor(absPath, kind), { force: true });
     return true;
   } catch {
     return false;
   }
 }
 
-export function startPreviewBuild(resolved: ResolvedVideo, probe: ProbeResult): PreviewStatus {
-  const file = previewPathFor(resolved.absPath);
-  if (builds.has(file) || fs.existsSync(file)) return getPreviewStatus(resolved.absPath);
+export function startPreviewBuild(resolved: ResolvedVideo, probe: ProbeResult, kind: PreviewKind): PreviewStatus {
+  const key = baseKey(resolved.absPath);
+  const file = previewPathFor(resolved.absPath, kind);
+  if (builds.has(key) || fs.existsSync(file)) return getPreviewStatus(resolved.absPath);
 
-  const build: PreviewBuild = { emitter: new EventEmitter(), percent: 0, child: null, cancelled: false };
-  builds.set(file, build);
+  const build: PreviewBuild = { emitter: new EventEmitter(), kind, percent: 0, child: null, cancelled: false };
+  builds.set(key, build);
   const tmp = file.replace(/\.mp4$/, '.tmp.mp4');
+  const hasAudio = (probe.audio || []).length > 0 || probe.audioTrackCount > 0;
 
-  const args = [
-    '-hide_banner',
-    '-nostdin',
-    '-y',
-    '-i',
-    resolved.absPath,
-    '-map',
-    '0:v:0',
-    '-map',
-    '0:a:0?',
-    '-sn',
-    '-dn',
+  const args = ['-hide_banner', '-nostdin', '-y'];
+  if (kind === 'keyframes') args.push('-skip_frame', 'nokey');
+  args.push('-i', resolved.absPath);
+  if (kind === 'keyframes' && !hasAudio) {
+    // Ohne Ton endet die Diashow sonst beim letzten Keyframe; eine stille Spur trägt die volle Länge.
+    args.push('-f', 'lavfi', '-t', probe.duration.toFixed(3), '-i', 'anullsrc=r=48000:cl=mono');
+  }
+  args.push('-map', '0:v:0');
+  if (hasAudio) args.push('-map', '0:a:0?');
+  else if (kind === 'keyframes') args.push('-map', '1:a:0');
+  args.push('-sn', '-dn');
+  if (kind === 'keyframes') args.push('-fps_mode', 'passthrough');
+  args.push(
     // Nicht hochskalieren, Breite auf 854 begrenzen, gerade Kantenlänge
     '-vf',
     "scale=w='min(854,iw)':h=-2",
@@ -95,16 +118,16 @@ export function startPreviewBuild(resolved: ResolvedVideo, probe: ProbeResult): 
     '-preset',
     'veryfast',
     '-crf',
-    '26',
+    kind === 'keyframes' ? '23' : '26',
     '-pix_fmt',
     'yuv420p',
-    // Kurze GOPs, damit der Player flott springt
+    // Keyframes-Kopie: jedes Bild ein I-Frame (exaktes Springen); volle Kopie: kurze GOPs
     '-g',
-    '30',
+    kind === 'keyframes' ? '1' : '30',
     '-c:a',
     'aac',
     '-b:a',
-    '96k',
+    kind === 'keyframes' && !hasAudio ? '32k' : '96k',
     '-ac',
     '2',
     '-movflags',
@@ -112,8 +135,8 @@ export function startPreviewBuild(resolved: ResolvedVideo, probe: ProbeResult): 
     '-progress',
     'pipe:1',
     '-nostats',
-    tmp,
-  ];
+    tmp
+  );
 
   const child = spawn('ffmpeg', args);
   build.child = child;
@@ -135,7 +158,7 @@ export function startPreviewBuild(resolved: ResolvedVideo, probe: ProbeResult): 
   });
 
   const finish = (error?: string) => {
-    builds.delete(file);
+    builds.delete(key);
     if (error) {
       fs.rmSync(tmp, { force: true });
       build.error = error;

@@ -20,7 +20,7 @@ import { checkRemux, REMUX_TARGETS, type RemuxTarget } from '../media/tools.js';
 import { getCachedScenes, SENSITIVITY_THRESHOLDS } from '../media/scenes.js';
 import { getTargetExtension } from '../media/split.js';
 import { encodeVideoId, listVideos, resolveVideo } from '../sources.js';
-import { cancelPreviewBuild, deletePreview, getPreviewEmitter, getPreviewStatus, previewPathFor, startPreviewBuild } from '../media/preview.js';
+import { bestPreviewFile, cancelPreviewBuild, deletePreview, getPreviewEmitter, getPreviewStatus, startPreviewBuild } from '../media/preview.js';
 import type { SceneParams, SegmentSpec, SplitMode } from '../types.js';
 
 export const videosRouter = Router();
@@ -535,8 +535,9 @@ videosRouter.post('/:id/preview', async (req, res, next) => {
     if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
     const probe = await probeVideo(resolved, req.params.id);
     if (!probe.video) return res.status(400).json({ error: 'Ohne Videospur gibt es keine Vorschau-Kopie.' });
-    const status = startPreviewBuild(resolved, probe);
-    res.status(status.available ? 200 : 202).json(status);
+    const kind = req.body?.kind === 'full' ? 'full' : 'keyframes';
+    const status = startPreviewBuild(resolved, probe, kind);
+    res.status(status.building ? 202 : 200).json(status);
   } catch (err) {
     next(err);
   }
@@ -569,13 +570,13 @@ videosRouter.get('/:id/preview/events', (req, res) => {
     }, 200);
 
   const status = getPreviewStatus(resolved.absPath);
-  send({ type: status.available ? 'done' : status.building ? 'progress' : 'idle', percent: status.percent });
+  send({ type: status.building ? 'progress' : status.available ? 'done' : 'idle', percent: status.percent, status });
   const emitter = getPreviewEmitter(resolved.absPath);
   if (!emitter) return end();
 
   const onProgress = (percent: number) => send({ type: 'progress', percent });
   const onDone = () => {
-    send({ type: 'done', percent: 100 });
+    send({ type: 'done', percent: 100, status: getPreviewStatus(resolved.absPath) });
     end();
   };
   const onError = (err: any) => {
@@ -604,9 +605,9 @@ videosRouter.get('/:id/preview/stream', (req, res, next) => {
   try {
     const resolved = resolveVideo(req.params.id);
     if (!resolved) return res.status(404).json({ error: 'Video nicht gefunden.' });
-    const file = previewPathFor(resolved.absPath);
-    if (!fs.existsSync(file)) return res.status(404).json({ error: 'Keine Vorschau-Kopie vorhanden.' });
-    sendFileWithRange(req, res, file, 'video/mp4');
+    const best = bestPreviewFile(resolved.absPath);
+    if (!best) return res.status(404).json({ error: 'Keine Vorschau-Kopie vorhanden.' });
+    sendFileWithRange(req, res, best.file, 'video/mp4');
   } catch (err: any) {
     next(err);
   }

@@ -84,7 +84,10 @@ Modus „An Szenen“: Splity erkennt Szenenwechsel (optional auch Schwarzbilder
   einem Durchgang) oder als einzelne Dateien. Tasten: `N` neues Segment, `I`/`O` Anfang/Ende = Player-Position, `Entf` löschen,
   Strg + Mausrad zoomt.
 - **Vorschau-Kopie**: Kann der Browser das Original nicht abspielen (HEVC, MKV, 4K/5K …), erzeugt Splity auf Knopfdruck eine
-  kleine H.264-Kopie (max. 854 px) nur für die Vorschau. Sie liegt in `data/cache/preview/`, geschnitten wird immer das Original.
+  kleine H.264-Kopie (max. 854 px) nur für die Vorschau. Standard ist die **schnelle Keyframe-Kopie** (`-skip_frame nokey`): sie
+  decodiert nur die I-Frames – genau die Bilder, an denen verlustfrei geschnitten werden kann – und ist deshalb in Sekunden bis
+  wenigen Minuten fertig (5K-HEVC mit 10-s-GOPs: ~300 statt ~180.000 Bilder). Optional gibt es die vollständige, flüssige Kopie.
+  Beide liegen in `data/cache/preview/`, geschnitten wird immer das Original.
 - **Werkzeuge**: Container wechseln (z. B. MKV → MP4), Tonspur herausziehen, Schnittplan als LosslessCut-CSV.
 
 ## Linux mit Podman (Bazzite, Fedora Atomic)

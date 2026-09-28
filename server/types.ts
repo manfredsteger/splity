@@ -201,9 +201,14 @@ export interface Job {
 }
 
 /** Vorschau-Kopie (kleine H.264-Datei für Browser, die den Codec nicht können) */
+export type PreviewKind = 'keyframes' | 'full';
+
 export interface PreviewStatus {
   available: boolean;
+  /** Art der vorhandenen Kopie: 'keyframes' = nur die Bilder an den Schnittstellen (schnell), 'full' = alle Bilder */
+  kind?: PreviewKind;
   building: boolean;
+  buildingKind?: PreviewKind;
   percent: number;
   error?: string;
   size?: number;
