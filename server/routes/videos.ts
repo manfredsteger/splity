@@ -383,7 +383,20 @@ videosRouter.get('/:id/thumb', async (req, res, next) => {
     }
 
     const t = req.query.t ? parseFloat(req.query.t as string) : 0;
-    const thumbPath = await generateThumbnail(resolved.absPath, Number.isNaN(t) ? 0 : t);
+    const time = Number.isNaN(t) ? 0 : t;
+    // Liegt die Zeit auf einem Keyframe (oder gibt es die vollständige Kopie), reicht die kleine
+    // Vorschau-Kopie als Quelle – beim 5K-HEVC dauert das 0,05 s statt 0,6 s. Nur Zeiten ZWISCHEN
+    // Keyframes (z. B. das letzte Bild eines Segments) brauchen das Original.
+    const best = bestPreviewFile(resolved.absPath);
+    let source: string | undefined;
+    if (best) {
+      if (best.kind === 'full') source = best.file;
+      else {
+        const cached = getCachedProbe(resolved);
+        if (cached && cached.keyframes.some((k) => Math.abs(k - time) < 0.02)) source = best.file;
+      }
+    }
+    const thumbPath = await generateThumbnail(resolved.absPath, time, source, source && best?.kind === 'keyframes' ? 0.05 : 0);
 
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');

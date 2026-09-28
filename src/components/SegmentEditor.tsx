@@ -421,12 +421,6 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
           <span className="font-semibold text-zinc-800 dark:text-zinc-200">{working.length} Segment{working.length === 1 ? '' : 'e'}</span>
           {' · '}behalten <span className="font-mono">{formatTime(kept)}</span>
           {' · '}verworfen <span className="font-mono">{formatTime(Math.max(0, duration - kept))}</span>
-          {hoverTime !== null && (
-            <span className="ml-2 font-mono text-zinc-400">
-              <Clock className="w-3 h-3 inline -mt-0.5 mr-0.5" />
-              {formatTimePrecise(hoverTime)}
-            </span>
-          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -476,15 +470,17 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
       </div>
 
       {/* Zeitleiste */}
-      <div ref={scrollRef} className="w-full overflow-x-auto pb-1 select-none">
+      <div ref={scrollRef} className={`w-full pb-1 select-none ${zoom > 1 ? 'overflow-x-auto' : 'overflow-x-hidden'}`}>
         <div style={{ width: `${zoom * 100}%` }} className="min-w-full">
-          {/* Lineal */}
-          <div className="relative h-4 text-[10px] font-mono text-zinc-400">
-            {rulerMarks.map((t) => (
-              <span key={t} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: pct(t) }}>
-                {formatTime(t)}
-              </span>
-            ))}
+          {/* Lineal (Marken nahe dem Ende weglassen, damit nichts über den Rand ragt) */}
+          <div className="relative h-4 text-[10px] font-mono text-zinc-400 overflow-hidden">
+            {rulerMarks
+              .filter((t) => t === 0 || (duration - t) / duration > 0.05 / zoom)
+              .map((t) => (
+                <span key={t} className={`absolute whitespace-nowrap ${t === 0 ? '' : '-translate-x-1/2'}`} style={{ left: pct(t) }}>
+                  {formatTime(t)}
+                </span>
+              ))}
             <span className="absolute right-0 whitespace-nowrap">{formatTime(duration)}</span>
           </div>
 
@@ -559,6 +555,18 @@ export const SegmentEditor: React.FC<SegmentEditorProps> = ({
             <div className="absolute top-0 bottom-0 w-[2px] bg-red-500 pointer-events-none z-40 -translate-x-1/2" style={{ left: pct(playerTime) }}>
               <div className="absolute -top-0 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-red-500" />
             </div>
+
+            {/* Cursor-Zeit als schwebendes Label – bewusst INNERHALB der Leiste, damit sich das Layout beim
+                Bewegen nicht verändert (ein Umbruch in der Kopfzeile ließ die Leiste unter der Maus springen) */}
+            {hoverTime !== null && !dragRef.current && (
+              <div
+                className="absolute bottom-1 -translate-x-1/2 px-1.5 py-0.5 rounded bg-zinc-900/85 text-white text-[10px] font-mono pointer-events-none z-50 whitespace-nowrap flex items-center gap-1"
+                style={{ left: pct(Math.min(duration * (1 - 40 / Math.max(400, (barRef.current?.clientWidth || 800))), Math.max(duration * (40 / Math.max(400, (barRef.current?.clientWidth || 800))), hoverTime))) }}
+              >
+                <Clock className="w-2.5 h-2.5" />
+                {formatTimePrecise(snapTime(points, hoverTime))}
+              </div>
+            )}
           </div>
 
           {/* Keyframes */}

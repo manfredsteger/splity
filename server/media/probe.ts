@@ -435,11 +435,19 @@ class ThumbnailQueue {
 
 const thumbQueue = new ThumbnailQueue();
 
-export async function generateThumbnail(filePath: string, timeInSeconds: number): Promise<string> {
+/**
+ * Vorschaubild. `sourceOverride`: kleine Vorschau-Kopie statt des Originals decodieren (bei 4K/5K-HEVC
+ * Faktor 10+ schneller); der Cache-Schlüssel bleibt der des Originals.
+ */
+export async function generateThumbnail(filePath: string, timeInSeconds: number, sourceOverride?: string, seekOffset = 0): Promise<string> {
   const cacheKey = getFileCacheKey(filePath);
   const safeTime = Math.max(0, Math.round(timeInSeconds * 100) / 100);
+  // Keyframe-Kopie: ihre Bilder liegen exakt auf den Keyframe-Zeiten; minimal davor suchen, sonst
+  // erwischt -ss durch Rundung das NÄCHSTE Bild (10 s später).
+  const seekTime = Math.max(0, safeTime - seekOffset);
   const thumbFileName = `${cacheKey}_t${safeTime.toFixed(2)}.jpg`;
   const thumbPath = path.join(THUMBS_DIR, thumbFileName);
+  const decodeFrom = sourceOverride || filePath;
 
   // If already exists on disk, return immediately without queueing
   if (fs.existsSync(thumbPath)) {
@@ -455,9 +463,9 @@ export async function generateThumbnail(filePath: string, timeInSeconds: number)
 
       const args = [
         '-ss',
-        safeTime.toString(),
+        seekTime.toFixed(3),
         '-i',
-        filePath,
+        decodeFrom,
         '-frames:v',
         '1',
         '-vf',

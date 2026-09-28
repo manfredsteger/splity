@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { AlertCircle, Clapperboard, Loader2, Play, X } from 'lucide-react';
+import { AlertCircle, Clapperboard, Loader2, Play, SkipBack, SkipForward, X } from 'lucide-react';
 import { formatBytes, formatTime } from '../utils/format.js';
 import type { PreviewKind, PreviewStatus } from '../types.js';
 
@@ -13,6 +13,8 @@ interface VideoPlayerProps {
   codec?: string;
   /** Mittlerer Keyframe-Abstand (s) – nur für den Hinweis zur Keyframe-Kopie */
   keyframeIntervalAvg?: number;
+  /** Keyframe-Zeiten (s) für die Schritt-Tasten ◀ ▶ */
+  keyframes?: number[];
   onTimeUpdate?: (seconds: number) => void;
 }
 
@@ -33,7 +35,7 @@ const IDLE: PreviewStatus = { available: false, building: false, percent: 0 };
  * lässt sich eine kleine H.264-Vorschau-Kopie erzeugen – die Quelle bleibt unverändert,
  * geschnitten wird immer das Original.
  */
-export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({ videoId, container, codec, keyframeIntervalAvg, onTimeUpdate }, ref) => {
+export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({ videoId, container, codec, keyframeIntervalAvg, keyframes, onTimeUpdate }, ref) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -177,6 +179,34 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({ vi
   );
 
   const playerUsable = !unsupported || (useProxy && preview.available);
+  const isKeyframeCopy = useProxy && preview.available && preview.kind === 'keyframes';
+
+  /** Zum vorherigen/nächsten Keyframe springen (bei der Keyframe-Kopie die einzige sinnvolle Navigation) */
+  const stepKeyframe = useCallback(
+    (dir: -1 | 1) => {
+      const el = videoRef.current;
+      if (!el || !keyframes || keyframes.length === 0) return;
+      const t = el.currentTime;
+      let target: number | undefined;
+      if (dir > 0) target = keyframes.find((k) => k > t + 0.05);
+      else {
+        for (let i = keyframes.length - 1; i >= 0; i--) {
+          if (keyframes[i] < t - 0.05) {
+            target = keyframes[i];
+            break;
+          }
+        }
+        if (target === undefined) target = 0;
+      }
+      if (target === undefined) return;
+      el.pause();
+      // Minimal hinter den Keyframe, damit der Browser sicher DIESES Bild zeigt
+      doSeek(target + 0.001, false);
+      setCurrent(target);
+      onTimeUpdate?.(target);
+    },
+    [keyframes, doSeek, onTimeUpdate]
+  );
 
   const buildPanel = (
     <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700/60 text-sm text-zinc-600 dark:text-zinc-400">
@@ -270,12 +300,38 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({ vi
           }}
         />
       </div>
+      {playerUsable && keyframes && keyframes.length > 1 && (
+        <div className="flex items-center justify-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => stepKeyframe(-1)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer"
+            title="Zum vorherigen Keyframe (mögliche Schnittstelle)"
+          >
+            <SkipBack className="w-3 h-3" />
+            Keyframe
+          </button>
+          <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            {isKeyframeCopy ? 'Keyframe-Kopie: das Bild wechselt nur an Schnittstellen' : 'Schnittstellen anspringen'}
+            {keyframeIntervalAvg ? ` (etwa alle ${keyframeIntervalAvg.toFixed(1)} s)` : ''}
+          </span>
+          <button
+            type="button"
+            onClick={() => stepKeyframe(1)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 cursor-pointer"
+            title="Zum nächsten Keyframe (mögliche Schnittstelle)"
+          >
+            Keyframe
+            <SkipForward className="w-3 h-3" />
+          </button>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-500 dark:text-zinc-400 px-1">
         <span className="flex items-center gap-1">
           <Play className="w-3 h-3" />
           <span>
-            {useProxy && preview.available && preview.kind === 'keyframes'
-              ? `Keyframe-Kopie: zeigt nur die Bilder an den möglichen Schnittstellen${keyframeIntervalAvg ? ` (etwa alle ${keyframeIntervalAvg.toFixed(1)} s)` : ''}`
+            {isKeyframeCopy
+              ? 'Abspielen zeigt nur alle paar Sekunden ein neues Bild – zum Suchen der Schnittstelle lieber im Zeitstrahl ziehen oder die Keyframe-Tasten nutzen'
               : 'Klick auf einen Teil, ein Segment oder eine Szene springt dorthin'}
           </span>
         </span>

@@ -494,7 +494,7 @@ export const VideoDetail: React.FC<VideoDetailProps> = ({
           </button>
         </div>
         {showPlayer && (
-          <VideoPlayer ref={playerRef} videoId={videoId} container={probe.container} codec={probe.video?.codec} keyframeIntervalAvg={probe.keyframeIntervalAvg} onTimeUpdate={setPlayerTime} />
+          <VideoPlayer ref={playerRef} videoId={videoId} container={probe.container} codec={probe.video?.codec} keyframeIntervalAvg={probe.keyframeIntervalAvg} keyframes={probe.keyframes} onTimeUpdate={setPlayerTime} />
         )}
       </div>
 
